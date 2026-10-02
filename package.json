@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "data": "cd tools && python3 fetch_overture.py && python3 build_buildings.py && python3 build_world.py"
+    "data": "cd tools && python3 fetch_overture.py && python3 build_buildings.py && python3 build_world.py",
+    "pages": "vite build && node tools/make_pages.mjs"
   },
   "license": "MIT",
   "dependencies": {
