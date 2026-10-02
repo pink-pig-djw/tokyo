@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>东京 3D 全景漫游</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #05070c; overflow: hidden; }
+    #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    #loader { position: fixed; left: 50%; bottom: 12%; transform: translateX(-50%); width: 280px; color: #ccd; font: 13px sans-serif; text-align: center; }
+    #bar { height: 2px; background: rgba(255,255,255,.15); margin-top: 8px; }
+    #progress { height: 100%; width: 0; background: #ff6a3d; }
+    body.loaded #loader { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="loader"><span id="loadlabel">加载中</span><div id="bar"><div id="progress"></div></div></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

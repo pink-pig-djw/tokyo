@@ -1,0 +1,25 @@
+{
+  "name": "tokyo-3d",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Real-data 3D panoramic tour of central Tokyo (Three.js + Overture Maps)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "data": "cd tools && python3 fetch_overture.py && python3 build_buildings.py && python3 build_world.py"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "earcut": "^3.0.2",
+    "n8ao": "^2.0.1",
+    "postprocessing": "^6.39.5",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "vite": "^8.3.2",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}
