@@ -85,8 +85,8 @@ export const PLACES = [
   },
   {
     id: 'asakusa', group: 'streets', zh: '浅草寺', ja: '浅草寺', st: 'G19', stName: '浅草',
-    lon: 139.7967, lat: 35.7148, h: 0,
-    cam: { y: 15, dist: 620, az: 200, el: 24 },
+    lon: 139.7962, lat: 35.7140, h: 0,
+    cam: { y: 24, dist: 210, az: 215, el: 13 },
     text: '东京最古老的寺院，相传创建于 628 年。雷门与五重塔是这里的标志。',
   },
   {

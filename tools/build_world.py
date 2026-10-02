@@ -461,6 +461,17 @@ for i in range(NB):
     wall[i], roof[i], style[i], flags[i] = w, rf, st, fl
 log("styles", np.bincount(style))
 
+# hand-modelled replacements: drop the extruded footprint, remember its pose for the model
+pagoda = None
+drop = np.zeros(NB, bool)
+for i in range(NB):
+    if B["name"][i] == "五重塔" and abs(CX[i] - 3262) < 80 and abs(CY[i] - 3784) < 80:
+        ang, _ = (lambda g: (lambda r: (math.atan2(*(np.array(r.exterior.coords)[1] - np.array(r.exterior.coords)[0])[::-1]), r))(shapely.minimum_rotated_rectangle(g)))(geoms[i])
+        pagoda = dict(x=float(CX[i]), z=float(-CY[i]), angle=float(-ang), h=float(H[i]),
+                      size=float(math.sqrt(AREA[i])))
+        drop[i] = True
+log("pagoda", pagoda)
+
 # ---------------------------------------------------------------- write building chunks
 ci = np.floor((CX - GRID_MIN) / CHUNK).astype(int).clip(0, GRID_N - 1)
 cj = np.floor((-CY - GRID_MIN) / CHUNK).astype(int).clip(0, GRID_N - 1)  # z = -north
@@ -468,7 +479,7 @@ chunks = []
 total_bytes = 0
 for i in range(GRID_N):
     for j in range(GRID_N):
-        sel = np.where((ci == i) & (cj == j))[0]
+        sel = np.where((ci == i) & (cj == j) & ~drop)[0]
         if len(sel) == 0:
             continue
         ccx = GRID_MIN + (i + 0.5) * CHUNK
@@ -1232,6 +1243,7 @@ manifest = dict(
     roofPalette=ROOF_PALETTE,
     rainbow=dict(x=float(rb_c[0]), z=float(-rb_c[1]), ax=float(axis[0]), az=float(-axis[1]),
                  length=float(rb_len), width=float(rb_wid), deck=RB_DECK),
+    pagoda=pagoda,
     wards=wards,
     stations=stations,
     stats=dict(buildings=int(NB), knownHeights=int(B["known"].sum()), trees=len(trees), signs=len(signs),

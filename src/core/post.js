@@ -119,7 +119,7 @@ export class Post {
       radius: 0.7,
       levels: 7,
     });
-    this.vignette = new VignetteEffect({ offset: 0.32, darkness: 0.42 });
+    this.vignette = new VignetteEffect({ offset: 0.55, darkness: 0.32 });
     this.tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
     const effects = [this.bloom, this.vignette, this.tone];
     // (SMAA conflicts with the extra reflection render target; MSAA or FXAA instead)

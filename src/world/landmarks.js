@@ -205,15 +205,16 @@ function skytreeLatticeMaterial() {
         float solid = max(max(d1, d2), max(ring, vert));
         float far = smoothstep(0.08, 0.3, max(fwidth(a / 9.0), fwidth(y / 16.0)));
         if (solid < 0.5 && far < 0.5) discard;
+        float coverage = mix(1.0, 0.35, far);   // solid stand-in for a lattice seen from afar
         diffuseColor.rgb *= 0.95;`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         // Iki: pale "Sumida" blue; Miyabi: Edo purple with gold
-        vec3 iki = vec3(0.45, 0.78, 1.0);
-        vec3 miyabi = mix(vec3(0.62, 0.25, 1.0), vec3(1.0, 0.78, 0.35), step(0.86, fract(y / 37.0)));
+        vec3 iki = vec3(0.22, 0.56, 1.0);
+        vec3 miyabi = mix(vec3(0.5, 0.16, 1.0), vec3(1.0, 0.72, 0.3), step(0.86, fract(y / 37.0)));
         vec3 gc = mix(iki, miyabi, uMode);
-        float grad = 0.55 + 0.45 * smoothstep(0.0, 495.0, y);
+        float grad = 0.45 + 0.55 * smoothstep(0.0, 495.0, y);
         float shimmer = 0.85 + 0.15 * sin(uTime * 1.7 + y * 0.05);
-        totalEmissiveRadiance += gc * uNight * 0.75 * grad * shimmer;`);
+        totalEmissiveRadiance += gc * uNight * 0.55 * grad * shimmer * coverage;`);
   };
   mat.customProgramCacheKey = () => 'skytree-lattice';
   return mat;
@@ -253,9 +254,9 @@ function skytree() {
     key: 'skytree-solid',
     uniform: { value: new THREE.Color('#bfe6ff') },
     emissiveGLSL: `
-      vec3 iki = vec3(0.55, 0.85, 1.0);
-      vec3 miyabi = vec3(0.75, 0.45, 1.0);
-      totalEmissiveRadiance += mix(iki, miyabi, uSkyMode) * vGlow * uNight * 1.1;`,
+      vec3 iki = vec3(0.35, 0.68, 1.0);
+      vec3 miyabi = vec3(0.62, 0.32, 1.0);
+      totalEmissiveRadiance += mix(iki, miyabi, uSkyMode) * vGlow * uNight * 0.6;`,
   });
   const ob = mat.onBeforeCompile;
   mat.onBeforeCompile = (shader, r) => {
@@ -380,6 +381,63 @@ function rainbowBridge(rb) {
   return group;
 }
 
+// ------------------------------------------------------------------ Senso-ji five-storey pagoda
+function pagoda(info) {
+  const parts = [];
+  const RED = '#b43a26', ROOF = '#5b6168', GOLD = '#b8954a', WHITE = '#e9e2d4';
+  const H = info.h || 53.3;
+  const spire = H * 0.27;
+  const body = H - spire;
+  const base = new THREE.BoxGeometry(info.size * 0.95, 2.2, info.size * 0.95);
+  base.translate(0, 1.1, 0);
+  parts.push(paint(base, '#8d8a84', 0));
+  const tierH = (body - 2.2) / 5;
+  for (let i = 0; i < 5; i++) {
+    const y0 = 2.2 + i * tierH;
+    const w = info.size * (0.58 - i * 0.045);
+    const core = new THREE.BoxGeometry(w, tierH * 0.62, w);
+    core.translate(0, y0 + tierH * 0.31, 0);
+    parts.push(paint(core, RED, 1.0));
+    // white plaster band + balcony rail
+    const band = new THREE.BoxGeometry(w * 1.02, tierH * 0.12, w * 1.02);
+    band.translate(0, y0 + tierH * 0.66, 0);
+    parts.push(paint(band, WHITE, 0.6));
+    // roof: a shallow four-sided frustum with up-swept corners
+    const span = w * 1.75;
+    const roof = new THREE.CylinderGeometry(w * 0.42, span * 0.71, tierH * 0.3, 4, 1);
+    roof.rotateY(Math.PI / 4);
+    const p = roof.attributes.position;
+    for (let k = 0; k < p.count; k++) {
+      const x = p.getX(k), y = p.getY(k), z = p.getZ(k);
+      const r = Math.hypot(x, z);
+      if (y < 0 && r > span * 0.6) p.setY(k, y + tierH * 0.12); // corners curl up
+    }
+    roof.translate(0, y0 + tierH * 0.86, 0);
+    parts.push(paint(roof, ROOF, 0.0));
+  }
+  // sorin: nine bronze rings on a mast with a water-flame finial
+  const mast = new THREE.CylinderGeometry(0.35, 0.5, spire, 8);
+  mast.translate(0, body + spire / 2, 0);
+  parts.push(paint(mast, GOLD, 0.4));
+  for (let r = 0; r < 9; r++) {
+    const ring = new THREE.CylinderGeometry(1.25 - r * 0.05, 1.25 - r * 0.05, 0.35, 12);
+    ring.translate(0, body + 2 + r * (spire * 0.6 / 9), 0);
+    parts.push(paint(ring, GOLD, 0.5));
+  }
+  const geo = clean(parts);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, glowMaterial('#ffb46a', {
+    key: 'pagoda', rough: 0.7, metal: 0.05,
+    // floodlit from below at night, warm
+    emissiveGLSL: 'totalEmissiveRadiance += uGlowColor * vGlow * uNight * (0.55 + 0.45 * smoothstep(40.0, 0.0, vLW.y));',
+  }));
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.position.set(info.x, 0, info.z);
+  mesh.rotation.y = info.angle;
+  return mesh;
+}
+
 export function createLandmarks(manifest) {
   const ll = makeLL(manifest);
   const group = new THREE.Group();
@@ -407,6 +465,7 @@ export function createLandmarks(manifest) {
   group.add(st);
 
   group.add(rainbowBridge(manifest.rainbow));
+  if (manifest.pagoda) group.add(pagoda(manifest.pagoda));
 
   // red/white aviation lights at the tips
   const tips = [
