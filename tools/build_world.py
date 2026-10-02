@@ -532,7 +532,7 @@ def rect_angle(g):
     return math.atan2(e[1], e[0]), c[:4]
 
 
-cand = np.where(((H > 14) & (AREA > 220) & (style != 0) & (style != 5)) | (H >= 60))[0]
+cand = np.where(((H > 12) & (AREA > 90) & (style != 0) & (style != 5)) | (H >= 60))[0]
 log("roof/aviation candidates", len(cand))
 for b in cand:
     g = geoms[b]
@@ -547,27 +547,64 @@ for b in cand:
             aviation.append((p[0], -p[1], h + 1.0))
         if h >= 150:
             aviation.append((cc[0], -cc[1], h + 6.0))
-    if AREA[b] < 220 or h < 14:
+    if h < 12 or AREA[b] < 90:
         continue
-    inner = g.buffer(-2.5)
-    if inner.is_empty or inner.area < 10:
+    inner = g.buffer(-2.0 if AREA[b] < 400 else -3.0)
+    if inner.is_empty or inner.area < 8:
         continue
-    n_units = int(min(max(AREA[b] / 350, 1), 7))
     xmin, ymin, xmax, ymax = inner.bounds
-    got = 0
-    for t in range(n_units * 4):
-        if got >= n_units:
-            break
-        px = xmin + hash01(b, t, 21) * (xmax - xmin)
-        py = ymin + hash01(b, t, 22) * (ymax - ymin)
-        if not shapely.contains_xy(inner, px, py):
-            continue
-        big = hash01(b, t, 23)
-        w = 2 + big * min(9, math.sqrt(AREA[b]) * 0.18)
-        d = 2 + hash01(b, t, 24) * min(7, math.sqrt(AREA[b]) * 0.15)
-        hh = 1.2 + hash01(b, t, 25) * (4.5 if h > 40 else 2.5)
-        roof_units.append((px, -py, h, w, d, hh, -ang))
-        got += 1
+    ca, sa = math.cos(ang), math.sin(ang)
+    cc = np.array(g.centroid.coords[0])
+
+    def try_place(w, d, hh, tag, tries=10, centre=False):
+        for t in range(tries):
+            if centre and t == 0:
+                px, py = cc
+            else:
+                px = xmin + hash01(b, t, tag, 21) * (xmax - xmin)
+                py = ymin + hash01(b, t, tag, 22) * (ymax - ymin)
+            # all four corners must sit on the roof
+            ok = True
+            for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                qx = px + (sx * w / 2) * ca - (sy * d / 2) * sa
+                qy = py + (sx * w / 2) * sa + (sy * d / 2) * ca
+                if not shapely.contains_xy(inner, qx, qy):
+                    ok = False
+                    break
+            if ok:
+                roof_units.append((px, -py, h, w, d, hh, -ang))
+                return True
+        return False
+
+    side = math.sqrt(AREA[b])
+    big = h >= 90
+    # supertall crowns: stepped machine-room "hat" (very visible in the skyline)
+    if big and hash01(b, 61) < 0.62:
+        k = 0.45 + hash01(b, 62) * 0.3
+        rect = shapely.minimum_rotated_rectangle(inner)
+        rc_ = np.array(rect.exterior.coords)
+        rw = np.linalg.norm(rc_[1] - rc_[0])
+        rd = np.linalg.norm(rc_[2] - rc_[1])
+        crown_h = 5 + hash01(b, 63) * 12
+        if try_place(rw * k, rd * k, crown_h, 1, tries=6, centre=True):
+            if hash01(b, 64) < 0.5:
+                try_place(rw * k * 0.55, rd * k * 0.55, crown_h + 4 + hash01(b, 65) * 8, 2, tries=4, centre=True)
+    # elevator penthouse (almost every Japanese mid-rise has one)
+    if 15 <= h < 120 and hash01(b, 66) < 0.8:
+        try_place(3.5 + hash01(b, 67) * 3, 4 + hash01(b, 68) * 3, 2.8 + hash01(b, 69) * 1.6, 3)
+    # water tank / cooling tower
+    if hash01(b, 70) < 0.55:
+        sz = 2 + hash01(b, 71) * (4 if h > 40 else 2.5)
+        try_place(sz, sz, 1.8 + hash01(b, 72) * 2.5, 4)
+    # scattered HVAC units
+    n_units = int(min(max(AREA[b] / 300, 0), 6) * (0.4 + hash01(b, 73)))
+    for t in range(n_units):
+        w = 1.5 + hash01(b, t, 23) * min(7, side * 0.15)
+        d = 1.5 + hash01(b, t, 24) * min(6, side * 0.12)
+        try_place(w, d, 1.0 + hash01(b, t, 25) * 2.2, 10 + t, tries=3)
+    # antenna masts on some towers
+    if big and hash01(b, 74) < 0.35:
+        try_place(1.2, 1.2, 10 + hash01(b, 75) * 18, 5, tries=4, centre=True)
 log("roof units", len(roof_units), "aviation lights", len(aviation))
 
 # neon signs on street-facing walls in nightlife zones
@@ -974,9 +1011,9 @@ ru = np.zeros(len(R), ru_dt)
 ru["x"] = np.round(R[:, 0] * 2)
 ru["z"] = np.round(R[:, 1] * 2)
 ru["y"] = np.round(R[:, 2] * 10)
-ru["w"] = np.round(R[:, 3] * 10).clip(0, 255)
-ru["d"] = np.round(R[:, 4] * 10).clip(0, 255)
-ru["h"] = np.round(R[:, 5] * 20).clip(0, 255)
+ru["w"] = np.round(R[:, 3] * 4).clip(0, 255)
+ru["d"] = np.round(R[:, 4] * 4).clip(0, 255)
+ru["h"] = np.round(R[:, 5] * 8).clip(0, 255)
 ru["r"] = np.round(((R[:, 6] % math.pi) / math.pi) * 255).clip(0, 255)
 sect(ru.tobytes(), len(ru))
 

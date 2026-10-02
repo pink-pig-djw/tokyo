@@ -213,7 +213,7 @@ function skytreeLatticeMaterial() {
         vec3 gc = mix(iki, miyabi, uMode);
         float grad = 0.55 + 0.45 * smoothstep(0.0, 495.0, y);
         float shimmer = 0.85 + 0.15 * sin(uTime * 1.7 + y * 0.05);
-        totalEmissiveRadiance += gc * uNight * 1.6 * grad * shimmer;`);
+        totalEmissiveRadiance += gc * uNight * 0.75 * grad * shimmer;`);
   };
   mat.customProgramCacheKey = () => 'skytree-lattice';
   return mat;
@@ -351,7 +351,7 @@ function rainbowBridge(rb) {
       varying float vA; varying vec3 vC;
       void main() {
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = clamp(1400.0 / -mv.z, 1.5, 12.0);
+        gl_PointSize = clamp(5200.0 / -mv.z, 2.0, 16.0);
         gl_Position = projectionMatrix * mv;
         vA = uNight;
         // gentle travelling rainbow shimmer over the base white

@@ -85,10 +85,11 @@ function roadMaterial(rail) {
           c = mix(c, vec3(0.85, 0.85, 0.82), clamp(m, 0.0, 1.0) * detail);
           // street lights pooling on the asphalt
           float sp = code <= 2 ? 32.0 : 36.0;
-          float pool = exp(-pow((fract(u / sp) - 0.5) * sp / 8.0, 2.0));
-          vec3 lampCol = code <= 2 ? vec3(1.0, 0.62, 0.28) : vec3(1.0, 0.82, 0.6);
-          float strength = code <= 2 ? 0.55 : code <= 4 ? 0.42 : code == 5 ? 0.3 : 0.12;
-          emis += lampCol * (0.25 + 0.75 * pool) * strength * uNight * (1.0 + uWet * 0.8);
+          float pool = exp(-pow((fract(u / sp) - 0.5) * sp / 6.5, 2.0));
+          float side = 1.0 - 0.5 * smoothstep(0.2, 0.9, 1.0 - abs(v));
+          vec3 lampCol = code <= 2 ? vec3(1.0, 0.6, 0.26) : (fract(sin(floor(u / 400.0) * 12.9) * 4375.5) > 0.5 ? vec3(1.0, 0.8, 0.55) : vec3(0.85, 0.92, 1.0));
+          float strength = code <= 2 ? 0.26 : code <= 4 ? 0.2 : code == 5 ? 0.14 : 0.05;
+          emis += lampCol * (0.12 + 0.88 * pool) * side * strength * uNight * (1.0 + uWet * 1.2);
           rough = mix(0.82, 0.12, uWet);
         }
         c = mix(c, vec3(0.92, 0.93, 0.96), uSnow * (part == 0 ? 0.55 : 0.3));

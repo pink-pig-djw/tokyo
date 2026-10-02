@@ -14,13 +14,26 @@ export class WorkerPool {
       for (let i = 0; i < n; i++) {
         const w = new GeometryWorker();
         w.onmessage = (e) => this._done(w, e.data);
-        w.onerror = (e) => { console.warn('worker error', e); };
+        w.onerror = (e) => { console.warn('worker failed, falling back to main thread', e); this._broken(); };
         w.busy = false;
         this.workers.push(w);
       }
     } catch (err) {
       console.warn('Web Workers unavailable, building on main thread', err);
       this.workers = [];
+    }
+  }
+
+  _broken() {
+    // e.g. a sandbox CSP that refuses blob:/data: workers: finish everything on the main thread
+    const jobs = [...this.pending.values(), ...this.queue];
+    this.pending.clear();
+    this.queue = [];
+    this.workers.forEach((w) => w.terminate());
+    this.workers = [];
+    for (const j of jobs) {
+      if (!j.buf || j.buf.byteLength === 0) { j.reject(new Error('worker lost job data')); continue; }
+      this.run(j.type, j.buf, j.opts).then(j.resolve, j.reject);
     }
   }
 
@@ -44,7 +57,8 @@ export class WorkerPool {
       const job = this.queue.shift();
       w.busy = true;
       this.pending.set(job.id, job);
-      w.postMessage({ id: job.id, type: job.type, buf: job.buf, opts: job.opts }, [job.buf]);
+      const copy = job.buf.slice(0);
+      w.postMessage({ id: job.id, type: job.type, buf: copy, opts: job.opts }, [copy]);
     }
   }
 

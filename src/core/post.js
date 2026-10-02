@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import {
   EffectComposer, RenderPass, EffectPass, Effect, EffectAttribute, BloomEffect, ToneMappingEffect,
-  ToneMappingMode, VignetteEffect, SMAAEffect, SMAAPreset,
+  ToneMappingMode, VignetteEffect, FXAAEffect,
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { U } from './env.js';
@@ -24,6 +24,9 @@ uniform float uDusk;
 
 void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
   vec3 col = inputColor.rgb;
+  // a single NaN would be smeared over huge areas by the mip-chain bloom
+  if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
+  col = min(col, vec3(60.0));
   if (depth < 0.999999) {
     vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
     vec4 vp = uInvProj * ndc;
@@ -119,7 +122,8 @@ export class Post {
     this.vignette = new VignetteEffect({ offset: 0.32, darkness: 0.42 });
     this.tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
     const effects = [this.bloom, this.vignette, this.tone];
-    if (!msaa) effects.push(new SMAAEffect({ preset: SMAAPreset.HIGH }));
+    // (SMAA conflicts with the extra reflection render target; MSAA or FXAA instead)
+    if (!msaa) effects.push(new FXAAEffect());
     this.composer.addPass(new EffectPass(camera, ...effects));
   }
 

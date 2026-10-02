@@ -29,6 +29,7 @@ export const U = {
   uCamPos: { value: new THREE.Vector3() },
   uFuji: { value: new THREE.Vector4(0, 0, 0, 0) }, // azimuth, elevation, half-width, visibility
   uExposure: { value: 1 },
+  uDbgEmis: { value: 1 },
 };
 
 // sky palette keyframes by sun elevation (degrees)
@@ -68,6 +69,13 @@ export class Environment {
     this.pal = { zenith: new THREE.Color(), horizon: new THREE.Color(), glow: new THREE.Color(), daylight: 1 };
     this.sunEl = 0;
     this._wet = 0; this._snow = 0; this._cloud = 0.35; this._fogBoost = 1;
+    const m = new Date(this.date.valueOf() + 9 * 3600e3).getUTCMonth() + 1;
+    this.setSeason(m >= 3 && m <= 4 ? 'spring' : m >= 5 && m <= 9 ? 'summer' : m >= 10 && m <= 11 ? 'autumn' : 'winter');
+  }
+
+  sunElevation() {
+    const v = sunDirection(this.date, TOKYO.lat, TOKYO.lon, new THREE.Vector3());
+    return Math.asin(THREE.MathUtils.clamp(v.y, -1, 1)) * 180 / Math.PI;
   }
 
   get hours() { return jstHours(this.date); }
@@ -82,6 +90,7 @@ export class Environment {
     this.season = s;
     U.uSakura.value = s === 'spring' ? 1 : 0;
     U.uAutumn.value = s === 'autumn' ? 1 : 0;
+    // winter brings snow on Fuji; actual snowfall is a weather choice
   }
 
   update(dt, sunLight, moonLight, hemi, camera) {
@@ -122,7 +131,7 @@ export class Environment {
     this.pal.horizon.multiplyScalar(1 - overcast * 0.25);
 
     // Tokyo light pollution: warm skyglow near the horizon at night
-    _c1.setRGB(0.035, 0.022, 0.016).multiplyScalar(night * (1 + overcast * 2.5));
+    _c1.setRGB(0.028, 0.02, 0.03).multiplyScalar(night * (1 + overcast * 2.5));
     this.pal.horizon.add(_c1);
     _c1.setRGB(0.006, 0.005, 0.007).multiplyScalar(night * (1 + overcast * 3));
     this.pal.zenith.add(_c1);

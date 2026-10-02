@@ -5,7 +5,7 @@
 //   aPos   Int16x4  x, y, z in 5 cm units relative to the chunk centre; w = wall
 //                   perimeter coordinate in 10 cm units (for window patterns)
 //   aInfo  Uint8x4  wall palette idx, roof palette idx, style, seed
-//   aInfo2 Uint16x2 building height (dm), flags | (min-height m << 8)
+//   aInfo2 Uint16x4 building height (dm), flags | (min-height m << 8), facade archetype, random16
 import earcut from 'earcut';
 
 const MAX_VERTS = 65000;
@@ -16,7 +16,7 @@ class Batch {
     this.cap = 16384;
     this.pos = new Int16Array(this.cap * 4);
     this.info = new Uint8Array(this.cap * 4);
-    this.info2 = new Uint16Array(this.cap * 2);
+    this.info2 = new Uint16Array(this.cap * 4);
     this.idx = [];
     this.n = 0;
     this.min = [1e9, 1e9, 1e9];
@@ -28,7 +28,7 @@ class Batch {
     while (this.n + extra > this.cap) this.cap *= 2;
     const p = new Int16Array(this.cap * 4); p.set(this.pos); this.pos = p;
     const i = new Uint8Array(this.cap * 4); i.set(this.info); this.info = i;
-    const j = new Uint16Array(this.cap * 2); j.set(this.info2); this.info2 = j;
+    const j = new Uint16Array(this.cap * 4); j.set(this.info2); this.info2 = j;
   }
 
   vert(x, y, z, u, info, info2) {
@@ -36,7 +36,7 @@ class Batch {
     const o = n * 4;
     this.pos[o] = x; this.pos[o + 1] = y; this.pos[o + 2] = z; this.pos[o + 3] = u;
     this.info[o] = info[0]; this.info[o + 1] = info[1]; this.info[o + 2] = info[2]; this.info[o + 3] = info[3];
-    this.info2[n * 2] = info2[0]; this.info2[n * 2 + 1] = info2[1];
+    this.info2[n * 4] = info2[0]; this.info2[n * 4 + 1] = info2[1]; this.info2[n * 4 + 2] = info2[2]; this.info2[n * 4 + 3] = info2[3];
     if (x < this.min[0]) this.min[0] = x; if (x > this.max[0]) this.max[0] = x;
     if (y < this.min[1]) this.min[1] = y; if (y > this.max[1]) this.max[1] = y;
     if (z < this.min[2]) this.min[2] = z; if (z > this.max[2]) this.max[2] = z;
@@ -51,10 +51,52 @@ class Batch {
       small: this.small,
       pos: this.pos.slice(0, this.n * 4),
       info: this.info.slice(0, this.n * 4),
-      info2: this.info2.slice(0, this.n * 2),
+      info2: this.info2.slice(0, this.n * 4),
       idx,
       sphere: [c[0], c[1], c[2], r],
     };
+  }
+}
+
+function hash32(a, b, c) {
+  let h = (a * 374761393 + b * 668265263 + c * 2246822519) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+// Facade archetypes (see FACADE_PARS in world/buildings.js)
+const A = {
+  HOUSE: 0, HOUSE_DARK: 1, HOUSE_TILE: 2, MANSION: 3, MANSION_GLASS: 4, DANCHI: 5, APT_PUNCHED: 6,
+  OFF_RIBBON: 7, OFF_PUNCHED: 8, OFF_FINS: 9, PENCIL: 10, OFF_GRID: 11, TWR_CURTAIN: 12, TWR_SILVER: 13,
+  TWR_FINS: 14, TWR_DARK: 15, TWR_STONE: 16, TWR_BANDED: 17, TWR_RESI: 18, IND_METAL: 19, IND_ALC: 20,
+  TEMPLE: 21, CIVIC: 22, HOTEL: 23,
+};
+
+function pick(r, table) {
+  let tot = 0;
+  for (const [, w] of table) tot += w;
+  let x = r * tot;
+  for (const [a, w] of table) { if ((x -= w) <= 0) return a; }
+  return table[table.length - 1][0];
+}
+
+function archetype(style, h, area, asp, r, zone) {
+  switch (style) {
+    case 0: return pick(r, [[A.HOUSE, 5], [A.HOUSE_DARK, 2], [A.HOUSE_TILE, 3]]);
+    case 1:
+      if (h > 60) return pick(r, [[A.TWR_RESI, 6], [A.MANSION_GLASS, 2], [A.HOTEL, 1]]);
+      if (asp > 2.6 && area > 350 && h < 45) return pick(r, [[A.DANCHI, 6], [A.MANSION, 3], [A.APT_PUNCHED, 1]]);
+      return pick(r, [[A.MANSION, 4], [A.MANSION_GLASS, 2.5], [A.APT_PUNCHED, 2.5], [A.HOTEL, zone ? 1.5 : 0.6], [A.PENCIL, zone ? 1.5 : 0.3]]);
+    case 2:
+      if (h > 80) return pick(r, [[A.TWR_STONE, 3], [A.TWR_BANDED, 2], [A.OFF_FINS, 2], [A.OFF_PUNCHED, 1.5], [A.TWR_SILVER, 1.5], [A.HOTEL, 1]]);
+      if (area < 180 && h > 12) return pick(r, [[A.PENCIL, 7], [A.OFF_PUNCHED, 2], [A.OFF_RIBBON, 1]]);
+      return pick(r, [[A.OFF_RIBBON, 2.5], [A.OFF_PUNCHED, 2.5], [A.OFF_FINS, 1.5], [A.OFF_GRID, 2], [A.HOTEL, 1], [A.PENCIL, zone ? 2 : 0.5], [A.TWR_STONE, 0.5]]);
+    case 3:
+      return pick(r, [[A.TWR_CURTAIN, 2.2], [A.TWR_SILVER, 2.2], [A.TWR_FINS, 1.4], [A.TWR_DARK, 1.4], [A.TWR_BANDED, 1.4], [A.OFF_GRID, 1.2], [A.TWR_STONE, 0.8]]);
+    case 4: return pick(r, [[A.IND_METAL, 1], [A.IND_ALC, 1]]);
+    case 5: return A.TEMPLE;
+    case 6: return A.CIVIC;
+    default: return A.OFF_PUNCHED;
   }
 }
 
@@ -111,7 +153,8 @@ export function buildChunk(buf) {
 
   let ri = 0, vi = 0;
   const info = [0, 0, 0, 0];
-  const info2 = [0, 0];
+  const info2 = [0, 0, 0, 0];
+  const cxi = Math.round(cx), czi = Math.round(cz);
 
   for (let b = 0; b < nB; b++) {
     const nr = NRINGS[b];
@@ -141,6 +184,16 @@ export function buildChunk(buf) {
 
     const outer = rings[0];
     const area = Math.abs(ringArea(outer.xs, outer.zs)) / 400; // m^2
+    let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9;
+    for (let k = 0; k < outer.xs.length; k++) {
+      mnx = Math.min(mnx, outer.xs[k]); mxx = Math.max(mxx, outer.xs[k]);
+      mnz = Math.min(mnz, outer.zs[k]); mxz = Math.max(mxz, outer.zs[k]);
+    }
+    const asp = Math.max(mxx - mnx, mxz - mnz) / Math.max(1, Math.min(mxx - mnx, mxz - mnz));
+    // parts of one building share the parent's random stream via its position
+    const rnd = hash32(cxi + Math.round(mnx / 200), czi + Math.round(mnz / 200), SEED[b] * 7 + b);
+    info2[2] = archetype(style, H[b] / 10, area, asp, (rnd & 0xffff) / 65536, (flags & 2) !== 0);
+    info2[3] = (rnd >>> 16) & 0xffff;
     const small = H[b] < 250 && area < 500 && style !== 3;
     const key = small ? 'small' : 'big';
 

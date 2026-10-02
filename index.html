@@ -4,18 +4,282 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>东京 3D 全景漫游</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+JP:wght@400;700;900&family=Noto+Sans+SC:wght@300;400;500;700&family=Shippori+Mincho+B1:wght@500;700;800&display=swap" />
   <style>
-    html, body { margin: 0; height: 100%; background: #05070c; overflow: hidden; }
-    #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-    #loader { position: fixed; left: 50%; bottom: 12%; transform: translateX(-50%); width: 280px; color: #ccd; font: 13px sans-serif; text-align: center; }
-    #bar { height: 2px; background: rgba(255,255,255,.15); margin-top: 8px; }
-    #progress { height: 100%; width: 0; background: #ff6a3d; }
-    body.loaded #loader { display: none; }
+    /* Layout: full-bleed WebGL city; a station-sign style rail on the left, HUD readouts
+       top-right, a time/weather bar at the bottom, cinematic captions during the tour. */
+    :root {
+      color-scheme: dark;
+      --ink: #070a10;            /* night */
+      --glass: rgba(10, 14, 22, 0.66);
+      --glass-strong: rgba(9, 12, 19, 0.86);
+      --rule: rgba(214, 224, 240, 0.12);
+      --paper: #ece7dc;          /* warm paper white for type */
+      --mute: #98a1b1;
+      --faint: #5f6878;
+      --ice: #a6dcff;            /* Skytree "Iki" blue, used for focus + active state */
+      --sodium: #f2a65a;         /* expressway lamp amber, used sparingly */
+      --display: "Shippori Mincho B1", "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif CJK SC", serif;
+      --body: "Noto Sans SC", "PingFang SC", "Hiragino Sans", "Microsoft YaHei", sans-serif;
+      --jp: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+      --rail: 312px;
+      --r: 10px;
+    }
+    [hidden] { display: none !important; }
+    html, body { height: 100%; margin: 0; background: var(--ink); color: var(--paper); overflow: hidden; }
+    body { font: 14px/1.55 var(--body); -webkit-font-smoothing: antialiased; }
+    #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    button:focus-visible, input:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
+    .glass { background: var(--glass); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); border: 1px solid var(--rule); }
+
+    /* ---------- left rail ---------- */
+    #rail { position: fixed; z-index: 10; top: calc(14px + env(safe-area-inset-top, 0px)); left: 14px; bottom: 14px; width: var(--rail);
+      display: flex; flex-direction: column; border-radius: var(--r); overflow: hidden; transition: transform .45s cubic-bezier(.2,.8,.2,1), opacity .3s; }
+    #rail.collapsed { transform: translateX(calc(-100% - 24px)); opacity: 0; pointer-events: none; }
+    .brand { padding: 18px 18px 12px; display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 4px 10px; border-bottom: 1px solid var(--rule); }
+    .brand h1 { margin: 0; font: 800 40px/1 var(--display); letter-spacing: .04em; }
+    .brand .sub { grid-column: 1 / -1; font: 500 11px/1.4 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--mute); }
+    .brand .coord { font: 400 11px/1.3 var(--mono); color: var(--faint); text-align: right; }
+    .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+    .modes button { background: transparent; border: 1px solid var(--rule); border-radius: 7px; padding: 7px 0 6px; display: grid; gap: 1px; }
+    .modes button b { font-weight: 500; font-size: 13px; }
+    .modes button small { font: 400 10px/1 var(--mono); color: var(--faint); letter-spacing: .08em; }
+    .modes button[aria-pressed="true"] { border-color: var(--ice); background: rgba(166, 220, 255, .1); }
+    .modes button[aria-pressed="true"] small { color: var(--ice); }
+    #places { overflow-y: auto; flex: 1; padding: 6px 0 10px; scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
+    .group h2 { margin: 14px 18px 6px; font: 500 11px/1 var(--mono); letter-spacing: .16em; color: var(--mute); display: flex; justify-content: space-between; }
+    .group h2 span:last-child { font-family: var(--jp); letter-spacing: .1em; color: var(--faint); }
+    .place { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; width: 100%; text-align: left;
+      background: transparent; border: 0; padding: 7px 16px 7px 14px; border-left: 2px solid transparent; }
+    .place:hover { background: rgba(255,255,255,.04); }
+    .place.active { background: rgba(166, 220, 255, .08); border-left-color: var(--ice); }
+    .place .nm { min-width: 0; }
+    .place .zh { display: block; font-size: 14px; font-weight: 500; line-height: 1.3; }
+    .place .ja { display: block; font: 400 11px/1.3 var(--jp); color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .place .m { font: 400 11px/1 var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+    /* station-numbering badge */
+    .badge { width: 30px; height: 30px; border-radius: 50%; box-sizing: border-box; border: 4px solid var(--c, #888); background: #f7f5f0; color: #111;
+      display: grid; place-items: center; font: 700 9px/1 var(--mono); letter-spacing: -.02em; text-align: center; }
+    .badge i { font-style: normal; display: block; font-size: 8px; line-height: .9; }
+    .badge.x { border-style: double; border-width: 3px; }
+    .rail-foot { padding: 10px 16px 12px; border-top: 1px solid var(--rule); font-size: 11px; line-height: 1.5; color: var(--faint); }
+    .rail-foot a { color: var(--mute); }
+    #railToggle { position: fixed; z-index: 11; top: calc(14px + env(safe-area-inset-top, 0px)); left: calc(var(--rail) + 22px); width: 34px; height: 34px; border-radius: 8px;
+      display: grid; place-items: center; transition: left .45s cubic-bezier(.2,.8,.2,1); }
+    #railToggle.collapsed { left: 14px; }
+
+    /* ---------- HUD ---------- */
+    #hud { position: fixed; z-index: 9; top: calc(14px + env(safe-area-inset-top, 0px)); right: 14px; padding: 10px 14px; border-radius: var(--r); min-width: 180px; display: grid; gap: 4px; }
+    #ward { font: 700 20px/1.1 var(--display); }
+    #ward small { font: 400 11px var(--mono); color: var(--mute); margin-left: 6px; letter-spacing: .06em; }
+    .readout { font: 400 11px/1.45 var(--mono); color: var(--mute); font-variant-numeric: tabular-nums; display: grid; grid-template-columns: auto 1fr; gap: 0 10px; }
+    .readout b { color: var(--paper); font-weight: 500; text-align: right; }
+    #compass { position: absolute; right: 12px; top: 12px; width: 26px; height: 26px; }
+    .hud-btns { display: flex; gap: 6px; margin-top: 6px; }
+    .icon-btn { background: transparent; border: 1px solid var(--rule); border-radius: 7px; height: 30px; min-width: 30px; padding: 0 8px; display: inline-grid; place-items: center; font-size: 12px; color: var(--mute); }
+    .icon-btn:hover { color: var(--paper); }
+
+    /* ---------- time bar ---------- */
+    #timebar { position: fixed; z-index: 9; left: calc(50% + var(--rail) / 2 + 7px); transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+      width: min(760px, calc(100vw - var(--rail) - 60px)); transition: left .45s cubic-bezier(.2,.8,.2,1), width .45s; border-radius: var(--r); padding: 10px 14px; display: grid;
+      grid-template-columns: auto 1fr auto; gap: 8px 14px; align-items: center; transition: width .45s; }
+    body.rail-collapsed #timebar { left: 50%; width: min(760px, calc(100vw - 28px)); }
+    .clock { font: 500 26px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+    .clock small { display: block; font: 400 10px/1.4 var(--mono); color: var(--faint); letter-spacing: .1em; }
+    .slider-wrap { position: relative; height: 34px; }
+    #sunband { position: absolute; left: 0; right: 0; top: 13px; height: 8px; border-radius: 4px; }
+    #timeSlider { position: absolute; inset: 0; width: 100%; margin: 0; appearance: none; -webkit-appearance: none; background: transparent; }
+    #timeSlider::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 26px; border-radius: 2px; background: var(--paper); box-shadow: 0 0 0 3px rgba(0,0,0,.35); }
+    #timeSlider::-moz-range-thumb { width: 4px; height: 26px; border: 0; border-radius: 2px; background: var(--paper); }
+    .ticks { position: absolute; left: 0; right: 0; bottom: -2px; display: flex; justify-content: space-between; font: 400 9px/1 var(--mono); color: var(--faint); pointer-events: none; }
+    .tb-right { display: flex; gap: 6px; align-items: center; }
+    .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; border-top: 1px solid var(--rule); padding-top: 8px; }
+    .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; }
+    .seg button { background: transparent; border: 0; padding: 4px 10px; font-size: 12px; color: var(--mute); }
+    .seg button + button { border-left: 1px solid var(--rule); }
+    .seg button[aria-pressed="true"] { color: var(--ink); background: var(--paper); }
+    .seg-label { font: 400 10px/1 var(--mono); color: var(--faint); letter-spacing: .14em; margin-right: 4px; }
+
+    /* ---------- caption ---------- */
+    #caption { position: fixed; z-index: 8; left: calc(var(--rail) + 40px); bottom: 150px; max-width: min(520px, calc(100vw - 60px)); pointer-events: none;
+      opacity: 0; transform: translateY(10px); transition: opacity .8s, transform .8s; text-shadow: 0 1px 14px rgba(0,0,0,.7); }
+    body.rail-collapsed #caption { left: 40px; }
+    #caption.on { opacity: 1; transform: none; }
+    #caption .eyebrow { display: flex; gap: 10px; align-items: center; font: 500 11px/1 var(--mono); letter-spacing: .16em; color: var(--mute); }
+    #caption h3 { margin: 10px 0 2px; font: 800 clamp(30px, 4.4vw, 52px)/1.05 var(--display); text-wrap: balance; }
+    #caption .ja { font: 400 15px/1.4 var(--jp); color: var(--mute); letter-spacing: .08em; }
+    #caption p { margin: 12px 0 0; font-size: 15px; line-height: 1.7; color: var(--paper); max-width: 34em; }
+    #caption .fig { font: 500 13px var(--mono); color: var(--sodium); margin-left: 4px; }
+    .letterbox { position: fixed; left: 0; right: 0; height: 0; background: #000; z-index: 7; transition: height .9s cubic-bezier(.2,.8,.2,1); pointer-events: none; }
+    .letterbox.top { top: 0; } .letterbox.bottom { bottom: 0; }
+    body.touring .letterbox { height: 7vh; }
+    #tourNav { position: fixed; z-index: 9; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); display: none; gap: 6px; padding: 6px; border-radius: var(--r); }
+    body.touring #tourNav { display: flex; }
+    body.touring #timebar, body.touring #hud { opacity: .0; pointer-events: none; }
+    #tourProgress { font: 400 11px/30px var(--mono); color: var(--mute); padding: 0 6px; font-variant-numeric: tabular-nums; }
+
+    /* ---------- labels ---------- */
+    #labels { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+    .lbl { position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); pointer-events: auto; cursor: pointer; display: grid; justify-items: center; will-change: transform; }
+    .lbl .card { padding: 4px 9px 5px; border-radius: 6px; background: var(--glass-strong); border: 1px solid var(--rule); white-space: nowrap; text-align: center; }
+    .lbl .card b { display: block; font-size: 12px; font-weight: 500; line-height: 1.25; }
+    .lbl .card span { display: block; font: 400 10px/1.2 var(--jp); color: var(--mute); }
+    .lbl .stem { width: 1px; height: 26px; background: linear-gradient(var(--paper), transparent); opacity: .7; }
+    .lbl:hover .card { border-color: var(--ice); }
+
+    /* ---------- loader / help ---------- */
+    #loader { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: radial-gradient(120% 90% at 50% 100%, #1b2233 0%, var(--ink) 60%); transition: opacity 1s; }
+    body.loaded #loader { opacity: 0; pointer-events: none; visibility: hidden; transition: opacity 1s, visibility 0s 1s; }
+    .ld { width: min(420px, calc(100vw - 48px)); display: grid; gap: 14px; }
+    .ld h1 { margin: 0; font: 800 clamp(64px, 14vw, 112px)/.95 var(--display); letter-spacing: .06em; }
+    .ld .en { font: 500 12px/1 var(--mono); letter-spacing: .4em; color: var(--mute); }
+    .ld .bar { height: 2px; background: var(--rule); overflow: hidden; }
+    #progress { height: 100%; width: 0; background: var(--paper); transition: width .3s; }
+    #loadlabel { font: 400 12px/1.4 var(--mono); color: var(--mute); }
+    .ld p { margin: 0; font-size: 12px; color: var(--faint); line-height: 1.6; }
+    #start { display: none; gap: 10px; }
+    body.ready #start { display: flex; flex-wrap: wrap; }
+    .cta { border-radius: 8px; padding: 10px 18px; border: 1px solid var(--paper); background: var(--paper); color: var(--ink); font-weight: 500; }
+    .cta.ghost { background: transparent; color: var(--paper); border-color: var(--rule); }
+    #help { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(4,6,10,.55); }
+    #help .box { width: min(520px, calc(100vw - 32px)); border-radius: var(--r); padding: 18px 20px; }
+    #help h2 { margin: 0 0 10px; font: 700 22px var(--display); }
+    #help dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+    #help dt { font: 500 12px var(--mono); color: var(--ice); }
+    #help dd { margin: 0; color: var(--paper); }
+    #help .close { margin-top: 14px; }
+    #help p { font-size: 12px; color: var(--mute); margin: 12px 0 0; }
+
+    @media (max-width: 760px) {
+      :root { --rail: min(86vw, 320px); }
+      #rail { top: auto; height: 62vh; bottom: 0; left: 0; right: 0; width: auto; border-radius: 14px 14px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+      #rail.collapsed { transform: translateY(105%); }
+      #railToggle, #railToggle.collapsed { left: 14px; }
+      #timebar, body.rail-collapsed #timebar { left: 50%; width: calc(100vw - 28px); grid-template-columns: auto 1fr; }
+      .tb-right { grid-column: 1 / -1; }
+      #hud { min-width: 0; }
+      #hud .readout, #compass { display: none; }
+      #caption, body.rail-collapsed #caption { left: 18px; bottom: 140px; }
+      .brand h1 { font-size: 32px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    body.shot * { transition: none !important; }
   </style>
 </head>
-<body>
-  <canvas id="c"></canvas>
-  <div id="loader"><span id="loadlabel">加载中</span><div id="bar"><div id="progress"></div></div></div>
+<body class="rail-collapsed">
+  <canvas id="c" tabindex="0" aria-label="东京三维城市视图"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+  <div class="letterbox top"></div><div class="letterbox bottom"></div>
+
+  <aside id="rail" class="glass collapsed" aria-label="地标与视角">
+    <header class="brand">
+      <h1>東京</h1>
+      <div class="coord">35.68°N<br />139.76°E</div>
+      <div class="sub">Tokyo · 3D 实景漫游</div>
+    </header>
+    <div class="modes" role="group" aria-label="浏览模式">
+      <button id="modeTour" aria-pressed="false"><b>巡游</b><small>TOUR</small></button>
+      <button id="modeOrbit" aria-pressed="true"><b>自由</b><small>ORBIT</small></button>
+      <button id="modeFly" aria-pressed="false"><b>飞行</b><small>FLY</small></button>
+    </div>
+    <nav id="places" aria-label="地标列表"></nav>
+    <footer class="rail-foot">
+      建筑、道路、水系与绿地：<a href="https://overturemaps.org" target="_blank" rel="noopener">Overture Maps</a> ·
+      © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 贡献者（ODbL）。缺失的楼高由模型推断，地标为程序化建模。
+    </footer>
+  </aside>
+  <button id="railToggle" class="glass collapsed" aria-label="地标列表" aria-expanded="false">
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+  </button>
+
+  <section id="hud" class="glass" aria-live="polite">
+    <div id="ward">—<small></small></div>
+    <div class="readout">
+      <span>LAT</span><b id="hLat">—</b>
+      <span>LON</span><b id="hLon">—</b>
+      <span>ALT</span><b id="hAlt">—</b>
+      <span>HDG</span><b id="hHdg">—</b>
+    </div>
+    <svg id="compass" viewBox="-13 -13 26 26" aria-hidden="true"><circle r="12" fill="none" stroke="rgba(255,255,255,.18)"/><g id="needle"><path d="M0-10 L3 0 L0 2 L-3 0Z" fill="#e8584a"/><path d="M0 10 L3 0 L0-2 L-3 0Z" fill="rgba(255,255,255,.5)"/></g></svg>
+    <div class="hud-btns">
+      <button class="icon-btn" id="btnLabels" aria-pressed="true" title="地标标签">标签</button>
+      <button class="icon-btn" id="btnFull" title="全屏">全屏</button>
+      <button class="icon-btn" id="btnHelp" title="操作说明">?</button>
+    </div>
+  </section>
+
+  <section id="timebar" class="glass" aria-label="时间与天气">
+    <div class="clock"><span id="clock">17:00</span><small id="dateLine">JST</small></div>
+    <div class="slider-wrap">
+      <div id="sunband"></div>
+      <input id="timeSlider" type="range" min="0" max="24" step="0.01" value="17" aria-label="东京当地时间" />
+      <div class="ticks"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+    </div>
+    <div class="tb-right">
+      <button class="icon-btn" id="btnPlay" aria-pressed="false" title="时间流逝">
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path id="playIcon" d="M2 1l9 5-9 5z" fill="currentColor"/></svg>
+      </button>
+      <button class="icon-btn" id="btnNow" title="切换到东京当前时间">此刻</button>
+    </div>
+    <div class="chips">
+      <span><span class="seg-label">天气</span><span class="seg" id="segWeather">
+        <button data-v="clear" aria-pressed="true">晴</button><button data-v="rain" aria-pressed="false">雨</button><button data-v="snow" aria-pressed="false">雪</button>
+      </span></span>
+      <span><span class="seg-label">季节</span><span class="seg" id="segSeason">
+        <button data-v="spring" aria-pressed="false">春·樱</button><button data-v="summer" aria-pressed="false">夏</button><button data-v="autumn" aria-pressed="false">秋·红叶</button><button data-v="winter" aria-pressed="false">冬</button>
+      </span></span>
+      <span><span class="seg-label">画质</span><span class="seg" id="segQuality">
+        <button data-v="low" aria-pressed="false">低</button><button data-v="medium" aria-pressed="false">中</button><button data-v="high" aria-pressed="false">高</button>
+      </span></span>
+    </div>
+  </section>
+
+  <div id="caption" aria-live="polite">
+    <div class="eyebrow"><span class="badge" id="capBadge"></span><span id="capStation"></span></div>
+    <h3 id="capTitle"></h3>
+    <div class="ja" id="capJa"></div>
+    <p id="capText"></p>
+  </div>
+  <div id="tourNav" class="glass">
+    <button class="icon-btn" id="tourPrev" aria-label="上一站">‹</button>
+    <span id="tourProgress">1 / 14</span>
+    <button class="icon-btn" id="tourNext" aria-label="下一站">›</button>
+    <button class="icon-btn" id="tourExit">结束巡游</button>
+  </div>
+
+  <div id="help" hidden>
+    <div class="box glass" role="dialog" aria-labelledby="helpTitle">
+      <h2 id="helpTitle">操作</h2>
+      <dl>
+        <dt>左键拖动</dt><dd>环绕旋转视角</dd>
+        <dt>右键拖动</dt><dd>平移（单指 / 双指同样可用）</dd>
+        <dt>滚轮</dt><dd>朝鼠标所指方向缩放</dd>
+        <dt>飞行模式</dt><dd>点击画面锁定鼠标；W A S D 移动，E / 空格上升，Q 下降，Shift 加速，Esc 退出</dd>
+        <dt>地标</dt><dd>左侧列表或画面中的标签，点击即飞往预设机位</dd>
+        <dt>时间</dt><dd>底部滑块调整东京当地时间，▶ 开启昼夜流逝</dd>
+      </dl>
+      <p>城市数据为真实数据（Overture Maps / OpenStreetMap），约 66 万栋建筑；没有高度记录的楼由机器学习模型根据周边推断，立面和灯光为程序化生成。</p>
+      <button class="cta close" id="helpClose">知道了</button>
+    </div>
+  </div>
+
+  <div id="loader">
+    <div class="ld">
+      <h1>東京</h1>
+      <div class="en">TOKYO · 3D</div>
+      <div class="bar"><div id="progress"></div></div>
+      <div id="loadlabel">正在载入城市数据…</div>
+      <div id="start">
+        <button class="cta" id="startTour">开始巡游</button>
+        <button class="cta ghost" id="startFree">自由探索</button>
+      </div>
+      <p>662,276 栋建筑 · 道路 · 铁路 · 水系 · 绿地 — 数据来自 Overture Maps 与 OpenStreetMap 贡献者</p>
+    </div>
+  </div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

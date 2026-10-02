@@ -4,7 +4,7 @@ const [out, query = '', waitMs = '4000', W = '1600', H = '900'] = process.argv.s
 const base = process.env.BASE || 'http://localhost:5173/';
 const browser = await chromium.launch({
   executablePath: '/opt/pw-browsers/chromium',
-  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
+  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--disable-gpu-watchdog', '--disable-renderer-backgrounding', '--disable-background-timer-throttling'],
 });
 const page = await browser.newPage({ viewport: { width: +W, height: +H } });
 const logs = [];
@@ -17,9 +17,15 @@ try {
 } catch (e) { logs.push('timeout waiting ready'); }
 const tReady = Date.now();
 await page.waitForTimeout(+waitMs);
-const data = await page.evaluate(() => window.__tokyo.capture(4));
 const fs = await import('node:fs');
-fs.writeFileSync(out, Buffer.from(data.split(',')[1], 'base64'));
+if (process.env.UI) {
+  await page.evaluate(() => { window.__tokyo.capture(3); });
+  await page.evaluate(() => window.__tokyo.ui && window.__tokyo.ui.update());
+  await page.screenshot({ path: out });
+} else {
+  const data = await page.evaluate(() => window.__tokyo.capture(4));
+  fs.writeFileSync(out, Buffer.from(data.split(',')[1], 'base64'));
+}
 console.log(`ready ${(tReady - t0) / 1000}s, shot ${out}`);
 console.log(logs.filter((l) => !l.includes('GPU stall')).slice(0, 40).join('\n'));
 await browser.close();

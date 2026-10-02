@@ -11,9 +11,38 @@ async function gunzip(buf) {
   return await new Response(stream).arrayBuffer();
 }
 
+async function fetchRetry(url, tries = 4) {
+  let err;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return res;
+      err = new Error(`${url}: HTTP ${res.status}`);
+    } catch (e) {
+      err = e;
+    }
+    await new Promise((r) => setTimeout(r, 400 * 2 ** i));
+  }
+  throw err;
+}
+
+function decodeBase64(text) {
+  if (Uint8Array.fromBase64) return Uint8Array.fromBase64(text.trim());
+  const bin = atob(text.trim());
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export async function fetchBinary(name, onProgress) {
-  const res = await fetch(BASE + name);
-  if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+  // the published artifact serves the binaries as base64 text (.b64.txt)
+  if (globalThis.__TOKYO_DATA_B64) {
+    const res = await fetchRetry(BASE + name.replace(/\.bin\.gz$/, '.b64.txt'));
+    const bytes = decodeBase64(await res.text());
+    onProgress?.(1);
+    return gunzip(bytes.buffer);
+  }
+  const res = await fetchRetry(BASE + name);
   let buf;
   if (onProgress && res.body && res.headers.get('content-length')) {
     const total = +res.headers.get('content-length');
@@ -38,8 +67,7 @@ export async function fetchBinary(name, onProgress) {
 }
 
 export async function fetchJSON(name) {
-  const res = await fetch(BASE + name);
-  if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+  const res = await fetchRetry(BASE + name);
   return res.json();
 }
 

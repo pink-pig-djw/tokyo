@@ -210,7 +210,7 @@ export function createRoofUnits(sec) {
     const o = i * 10;
     const dv = sec.dv;
     p.set(dv.getInt16(o, true) / 2, dv.getUint16(o + 4, true) / 10, dv.getInt16(o + 2, true) / 2);
-    s.set(dv.getUint8(o + 6) / 10, dv.getUint8(o + 8) / 20, dv.getUint8(o + 7) / 10);
+    s.set(dv.getUint8(o + 6) / 4, dv.getUint8(o + 8) / 8, dv.getUint8(o + 7) / 4);
     q.setFromAxisAngle(up, dv.getUint8(o + 9) / 255 * Math.PI);
     m4.compose(p, q, s);
     inst.setMatrixAt(i, m4);

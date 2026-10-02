@@ -67,21 +67,30 @@ function groundMaterial(color, rough, opts = {}) {
   return mat;
 }
 
-export function waterMaterial() {
-  const mat = new THREE.MeshStandardMaterial({ color: '#0d2a33', roughness: 0.05, metalness: 0.0 });
+export function waterMaterial(refl) {
+  const mat = new THREE.MeshStandardMaterial({ color: '#0b222b', roughness: 0.06, metalness: 0.0 });
+  if (refl && refl.scale) mat.envMapIntensity = 0.35;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = U.uTime;
     shader.uniforms.uNight = U.uNight;
     shader.uniforms.uWet = U.uWet;
+    const R = refl ? refl.uniforms : { tReflect: { value: null }, uReflMatrix: { value: new THREE.Matrix4() }, uReflStrength: { value: 0 } };
+    shader.uniforms.tReflect = R.tReflect;
+    shader.uniforms.uReflMatrix = R.uReflMatrix;
+    shader.uniforms.uReflStrength = R.uReflStrength;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGW;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGW;\nvarying vec4 vReflUv;\nuniform mat4 uReflMatrix;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvReflUv = uReflMatrix * vec4(vGW, 1.0);');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vGW;
+        varying vec4 vReflUv;
+        uniform sampler2D tReflect;
+        uniform float uReflStrength;
         uniform float uTime; uniform float uNight; uniform float uWet;
         ${NOISE_GLSL}
-        vec2 waveGrad(vec2 p, float t) {
+        vec2 waveGrad(vec2 p, float t, float mpp) {
+          // sum of directional waves; octaves finer than ~3 px are faded out (no moire)
           vec2 g = vec2(0.0);
           float a = 1.0;
           vec2 dirs[5] = vec2[5](vec2(1.0, 0.3), vec2(-0.6, 1.0), vec2(0.8, -0.9), vec2(-1.0, -0.2), vec2(0.2, 1.0));
@@ -89,21 +98,35 @@ export function waterMaterial() {
           for (int i = 0; i < 5; i++) {
             vec2 d = normalize(dirs[i]);
             float ph = dot(d, p) * fr + t * (0.9 + float(i) * 0.37);
-            g += d * cos(ph) * a * fr;
+            float nyq = 1.0 - smoothstep(0.08, 0.3, fr * mpp);
+            g += d * cos(ph) * a * fr * nyq;
             fr *= 1.9; a *= 0.62;
           }
           return g;
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        vec2 wDist = vec2(0.0);
         {
           float dist = length(vGW - cameraPosition);
           float detail = 1.0 - smoothstep(300.0, 6000.0, dist);
-          vec2 g = waveGrad(vGW.xz, uTime) * (1.2 + uWet * 1.5);
-          g += vec2(gnoise(vGW.xz * 0.6 + uTime * 0.7) - 0.5, gnoise(vGW.zx * 0.6 - uTime * 0.6) - 0.5) * 0.22 * detail;
+          float mpp = length(fwidth(vGW.xz));
+          vec2 g = waveGrad(vGW.xz, uTime, mpp) * (1.2 + uWet * 1.5);
+          float nyqN = 1.0 - smoothstep(0.15, 0.6, 0.6 * mpp);
+          g += vec2(gnoise(vGW.xz * 0.6 + uTime * 0.7) - 0.5, gnoise(vGW.zx * 0.6 - uTime * 0.6) - 0.5) * 0.22 * detail * nyqN;
           g *= mix(0.25, 1.0, detail);
           vec3 wn = normalize(vec3(-g.x, 1.0, -g.y));
           normal = normalize((viewMatrix * vec4(wn, 0.0)).xyz);
+          wDist = g * mix(0.6, 1.0, detail);
         }`)
+      .replace('#include <opaque_fragment>', `
+        if (uReflStrength > 0.0) {
+          vec2 ruv = vReflUv.xy / vReflUv.w + wDist * 0.35;
+          vec3 refl = texture2D(tReflect, clamp(ruv, 0.001, 0.999)).rgb;
+          vec3 V = normalize(vViewPosition);
+          float F = 0.02 + 0.98 * pow(1.0 - max(dot(normal, V), 0.0), 5.0);
+          outgoingLight = mix(outgoingLight, refl * 0.9, clamp(F * 1.15 + 0.1, 0.0, 1.0) * uReflStrength);
+        }
+        #include <opaque_fragment>`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         diffuseColor.rgb *= 0.85 + 0.3 * gnoise(vGW.xz * 0.003);`);
   };
@@ -140,10 +163,11 @@ function layerGeometry(xz, idx, scale, y) {
   return g;
 }
 
-export function createGround(manifest, groundLayers, far) {
+export function createGround(manifest, groundLayers, far, refl) {
   const group = new THREE.Group();
   const core = manifest.core;
-  const water = waterMaterial();
+  const water = waterMaterial(refl);
+  group.userData.waterMeshes = [];
 
   // urban base plane over the core
   const w = core.x1 - core.x0, d = core.z1 - core.z0;
@@ -176,6 +200,7 @@ export function createGround(manifest, groundLayers, far) {
     m.receiveShadow = true;
     m.renderOrder = -9;
     group.add(m);
+    if (L.id === 0) group.userData.waterMeshes.push(m);
   }
 
   // far field (beyond the detailed core)
