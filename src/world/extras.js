@@ -2,34 +2,43 @@
 // obstruction lights, rooftop plant rooms, neon blade signs / light boxes, big LED
 // screens and the endless low-rise sprawl beyond the detailed core.
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { U } from '../core/env.js';
+import { SAFE_NORMAL_BEGIN } from '../core/glsl.js';
 
 // ------------------------------------------------------------------ trees
+// Low-poly, indexed geometry (26 triangles per broadleaf tree instead of 90) and
+// 1.5 km spatial tiles, so trees can be frustum-culled, distance-culled and thinned
+// per quality level at runtime.
+function indexedOnly(g, keep = ['position']) {
+  for (const k of Object.keys(g.attributes)) if (!keep.includes(k)) g.deleteAttribute(k);
+  return g.index ? g : mergeVertices(g);
+}
+
+function tagPart(g, v) {
+  g.setAttribute('aPart', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count).fill(v), 1));
+  return g;
+}
+
 function treeGeometries() {
-  // broadleaf: jittered icosahedron crown + trunk
-  const crown = new THREE.IcosahedronGeometry(1, 1);
+  // broadleaf: jittered icosahedron (12 vertices, 20 faces) + three-sided trunk
+  const crown = indexedOnly(new THREE.IcosahedronGeometry(1, 0));
   const p = crown.attributes.position;
   for (let i = 0; i < p.count; i++) {
     const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-    const n = 1 + 0.18 * Math.sin(x * 5.1 + y * 3.7) * Math.cos(z * 4.3 + x * 1.3);
+    const n = 1 + 0.16 * Math.sin(x * 5.1 + y * 3.7) * Math.cos(z * 4.3 + x * 1.3);
     p.setXYZ(i, x * n, y * n * 0.82, z * n);
   }
-  crown.translate(0, 1.55, 0);
   crown.scale(0.36, 0.5, 0.36);
-  const trunk = new THREE.CylinderGeometry(0.03, 0.045, 0.62, 5, 1, true);
-  trunk.translate(0, 0.31, 0);
-  const tag = (g, v) => {
-    const a = new Float32Array(g.attributes.position.count).fill(v);
-    g.setAttribute('aPart', new THREE.BufferAttribute(a, 1));
-    return g.toNonIndexed();
-  };
-  const broad = mergeGeometries([tag(trunk.clone(), 0), tag(crown, 1)]);
-  const cone = new THREE.ConeGeometry(0.3, 0.85, 7, 2);
+  crown.translate(0, 0.78, 0);
+  const trunk = indexedOnly(new THREE.CylinderGeometry(0.035, 0.05, 0.6, 3, 1, true));
+  trunk.translate(0, 0.3, 0);
+  const broad = mergeGeometries([tagPart(trunk.clone(), 0), tagPart(crown, 1)]);
+  const cone = indexedOnly(new THREE.ConeGeometry(0.3, 0.85, 6, 1, true));
   cone.translate(0, 0.62, 0);
-  const cone2 = new THREE.ConeGeometry(0.22, 0.5, 7, 1);
-  cone2.translate(0, 0.9, 0);
-  const conifer = mergeGeometries([tag(trunk, 0), tag(cone, 1), tag(cone2, 1)]);
+  const cone2 = indexedOnly(new THREE.ConeGeometry(0.21, 0.5, 6, 1, true));
+  cone2.translate(0, 0.92, 0);
+  const conifer = mergeGeometries([tagPart(trunk, 0), tagPart(cone, 1), tagPart(cone2, 1)]);
   broad.computeVertexNormals();
   conifer.computeVertexNormals();
   return { broad, conifer };
@@ -41,43 +50,33 @@ const HANAMI = [[139.7714, 35.7148, 420], [139.7445, 35.6905, 330], [139.6985, 3
   [139.7570, 35.6770, 280], [139.7520, 35.6830, 220], [139.7380, 35.6970, 240], [139.7590, 35.6600, 220],
   [139.7880, 35.7100, 280], [139.7290, 35.6560, 200], [139.7880, 35.6930, 200]];
 
-function treeMaterial(ll) {
+function treeMaterial() {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0 });
-  const spots = HANAMI.map(([lo, la, r]) => { const v = ll(lo, la); return new THREE.Vector3(v.x, v.z, r); });
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, {
       uTime: U.uTime, uSakura: U.uSakura, uAutumn: U.uAutumn, uSnow: U.uSnow, uNight: U.uNight,
-      uSpots: { value: spots },
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aPart;
-        attribute float aType;
+        attribute vec3 aTree;     // type, seed, in a hanami spot
         varying float vPart;
-        varying float vType;
-        varying float vSeed;
-        varying float vHanami;
-        uniform float uTime;
-        uniform vec3 uSpots[${HANAMI.length}];`)
+        flat varying vec3 vTree;
+        uniform float uTime;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vPart = aPart;
-        vType = aType;
+        vTree = aTree;
         vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
-        vSeed = fract(sin(dot(ip.xz, vec2(12.9898, 78.233))) * 43758.5453);
-        vHanami = 0.0;
-        for (int i = 0; i < ${HANAMI.length}; i++) {
-          float d = length(ip.xz - uSpots[i].xy);
-          if (d < uSpots[i].z && fract(vSeed * 7.31) < 0.62 * (1.0 - d / uSpots[i].z * 0.5)) vHanami = 1.0;
-        }
         float sway = sin(uTime * 1.3 + ip.x * 0.05 + ip.z * 0.07) * 0.025 * aPart * transformed.y;
         transformed.x += sway;
         transformed.z += sway * 0.6;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying float vPart; varying float vType; varying float vSeed; varying float vHanami;
+        varying float vPart; flat varying vec3 vTree;
         uniform float uSakura; uniform float uAutumn; uniform float uSnow; uniform float uNight;`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-        int t = int(vType + 0.5);
+        int t = int(vTree.x + 0.5);
+        float vSeed = vTree.y;
         vec3 c;
         if (vPart < 0.5) c = vec3(0.22, 0.17, 0.13);
         else {
@@ -89,53 +88,101 @@ function treeMaterial(ll) {
           else c = mix(g0, g0 * vec3(1.3, 1.05, 0.7), uAutumn * 0.3 * vSeed);
           c *= 0.8 + 0.4 * vSeed;
           // somei-yoshino bloom: pale pink, almost white in full bloom
-          float bloom = uSakura * max(vHanami, t == 3 ? 1.0 : 0.0);
+          float bloom = uSakura * max(vTree.z, t == 3 ? 1.0 : 0.0);
           c = mix(c, mix(vec3(0.98, 0.62, 0.76), vec3(1.0, 0.8, 0.88), vSeed), bloom);
           c = mix(c, vec3(0.88, 0.9, 0.94), uSnow * 0.65 * smoothstep(0.0, 0.8, vNormal.y));
         }
         diffuseColor.rgb = c;`);
   };
-  mat.customProgramCacheKey = () => 'tokyo-tree';
+  mat.customProgramCacheKey = () => 'tokyo-tree-v2';
   return mat;
 }
 
-export function createTrees(sec, quality, ll) {
+const TILE = 1500;
+
+/** Deterministic shuffle so that drawing the first k instances of a tile is a uniform subsample. */
+function shuffled(arr, seed) {
+  let s = seed >>> 0 || 1;
+  for (let i = arr.length - 1; i > 0; i--) {
+    s = Math.imul(s ^ (s >>> 15), 2246822519) >>> 0;
+    s = Math.imul(s ^ (s >>> 13), 3266489917) >>> 0;
+    const j = s % (i + 1);
+    const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  return arr;
+}
+
+/** Bucket instance indices into square tiles. */
+function tileBuckets(n, xOf, zOf, keyExtra = () => 0) {
+  const buckets = new Map();
+  for (let i = 0; i < n; i++) {
+    const key = `${Math.floor(xOf(i) / TILE)}_${Math.floor(zOf(i) / TILE)}_${keyExtra(i)}`;
+    let b = buckets.get(key);
+    if (!b) { b = []; buckets.set(key, b); }
+    b.push(i);
+  }
+  return buckets;
+}
+
+/** Tiled instanced meshes; returns { group, tiles: [{ mesh, center, radius, n }] }. */
+export function createTrees(sec, ll) {
   const { broad, conifer } = treeGeometries();
-  const step = quality.level === 'low' ? 3 : quality.level === 'medium' ? 2 : 1;
-  const counts = [0, 0];
-  for (let i = 0; i < sec.n; i += step) counts[sec.dv.getUint8(i * 6 + 4) === 1 ? 1 : 0]++;
-  const mat = treeMaterial(ll);
-  const meshes = [new THREE.InstancedMesh(broad, mat, counts[0]), new THREE.InstancedMesh(conifer, mat, counts[1])];
-  const types = [new Float32Array(counts[0]), new Float32Array(counts[1])];
-  const k = [0, 0];
+  const mat = treeMaterial();
+  const spots = HANAMI.map(([lo, la, r]) => { const v = ll(lo, la); return [v.x, v.z, r]; });
+  const X = (i) => sec.dv.getInt16(i * 6, true) / 2;
+  const Z = (i) => sec.dv.getInt16(i * 6 + 2, true) / 2;
+  const T = (i) => sec.dv.getUint8(i * 6 + 4);
+  const buckets = tileBuckets(sec.n, X, Z, (i) => (T(i) === 1 ? 1 : 0));
+  const group = new THREE.Group();
+  const tiles = [];
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
-  for (let i = 0; i < sec.n; i += step) {
-    const o = i * 6;
-    const x = sec.dv.getInt16(o, true) / 2;
-    const z = sec.dv.getInt16(o + 2, true) / 2;
-    const t = sec.dv.getUint8(o + 4);
-    const sc = sec.dv.getUint8(o + 5) / 255;
-    const h = 6 + sc * 13 * (t === 1 ? 1.1 : 1);
-    const which = t === 1 ? 1 : 0;
-    q.setFromAxisAngle(up, (i * 2.399) % (Math.PI * 2));
-    const wide = 0.85 + ((i * 7919) % 100) / 300;
-    s.set(h * wide, h, h * wide);
-    p.set(x, 0, z);
-    m4.compose(p, q, s);
-    meshes[which].setMatrixAt(k[which], m4);
-    types[which][k[which]] = t;
-    k[which]++;
+  let seed = 7;
+  for (const [key, idx] of buckets) {
+    shuffled(idx, seed++);
+    const conif = key.endsWith('_1');
+    const mesh = new THREE.InstancedMesh(conif ? conifer : broad, mat, idx.length);
+    const attr = new Float32Array(idx.length * 3);
+    let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+    idx.forEach((i, k) => {
+      const x = X(i), z = Z(i), t = T(i);
+      const sc = sec.dv.getUint8(i * 6 + 5) / 255;
+      const h = 6 + sc * 13 * (t === 1 ? 1.1 : 1);
+      q.setFromAxisAngle(up, (i * 2.399) % (Math.PI * 2));
+      const wide = 0.85 + ((i * 7919) % 100) / 300;
+      m4.compose(p.set(x, 0, z), q, s.set(h * wide, h, h * wide));
+      mesh.setMatrixAt(k, m4);
+      const sd = Math.abs(Math.sin(x * 12.9898 + z * 78.233) * 43758.5453) % 1;
+      let hanami = 0;
+      for (const [sx, sz, r] of spots) {
+        const d = Math.hypot(x - sx, z - sz);
+        if (d < r && ((sd * 7.31) % 1) < 0.62 * (1 - d / r * 0.5)) { hanami = 1; break; }
+      }
+      attr[k * 3] = t; attr[k * 3 + 1] = sd; attr[k * 3 + 2] = hanami;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    });
+    // per-tile geometry wrapper so each tile carries its own instance attribute
+    const g = new THREE.InstancedBufferGeometry();
+    const src = conif ? conifer : broad;
+    g.index = src.index;
+    for (const k of Object.keys(src.attributes)) g.setAttribute(k, src.attributes[k]);
+    g.setAttribute('aTree', new THREE.InstancedBufferAttribute(attr, 3));
+    mesh.geometry = g;
+    const center = new THREE.Vector3((minX + maxX) / 2, 8, (minZ + maxZ) / 2);
+    const radius = Math.hypot(maxX - minX, maxZ - minZ) / 2 + 20;
+    mesh.boundingSphere = new THREE.Sphere(center.clone(), radius);
+    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.matrixAutoUpdate = false;
+    group.add(mesh);
+    tiles.push({ mesh, center, radius, n: idx.length });
   }
-  const group = new THREE.Group();
-  meshes.forEach((m, i) => {
-    m.geometry.setAttribute('aType', new THREE.InstancedBufferAttribute(types[i], 1));
-    m.receiveShadow = true;
-    m.castShadow = quality.level === 'high';
-    m.computeBoundingSphere();
-    group.add(m);
-  });
-  return group;
+  return { group, tiles };
+}
+
+/** Draw only a fraction of every tile's instances (instances are pre-shuffled). */
+export function setTileDensity(tiles, density) {
+  for (const t of tiles) t.mesh.count = Math.max(0, Math.min(t.n, Math.round(t.n * density)));
 }
 
 // ------------------------------------------------------------------ point lights (lamps, aviation)
@@ -215,31 +262,79 @@ function pointCloud(sec, kind, yScale = 10) {
 export function createLamps(sec) { return pointCloud(sec, 'lamp'); }
 export function createAviation(sec) { return pointCloud(sec, 'aviation'); }
 
+// ------------------------------------------------------------------ shared: tiled instancing
+/** A unit box standing on y = 0, without its (never visible) bottom face. */
+function openBox() {
+  const g = new THREE.BoxGeometry(1, 1, 1);
+  g.translate(0, 0.5, 0);
+  const idx = Array.from(g.index.array);
+  idx.splice(18, 6);                       // faces: +x -x +y -y +z -z ; drop -y
+  g.setIndex(idx);
+  g.clearGroups();
+  return g;
+}
+
+/**
+ * Build tiled InstancedMeshes. `place(i, matrix, color)` fills one instance.
+ * Returns { group, tiles: [{ mesh, center, radius, n }] }.
+ */
+function tiledInstances(n, X, Z, geometry, material, place, { tile = TILE, height = 30, colors = true, seed = 11 } = {}) {
+  const buckets = new Map();
+  for (let i = 0; i < n; i++) {
+    const key = `${Math.floor(X(i) / tile)}_${Math.floor(Z(i) / tile)}`;
+    let b = buckets.get(key);
+    if (!b) { b = []; buckets.set(key, b); }
+    b.push(i);
+  }
+  const group = new THREE.Group();
+  const tiles = [];
+  const m4 = new THREE.Matrix4();
+  const col = new THREE.Color();
+  for (const idx of buckets.values()) {
+    shuffled(idx, seed++);
+    const mesh = new THREE.InstancedMesh(geometry, material, idx.length);
+    let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9, maxY = 0;
+    idx.forEach((i, k) => {
+      const top = place(i, m4, col);
+      mesh.setMatrixAt(k, m4);
+      if (colors) mesh.setColorAt(k, col);
+      const x = X(i), z = Z(i);
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+      maxY = Math.max(maxY, top || height);
+    });
+    const center = new THREE.Vector3((minX + maxX) / 2, maxY / 2, (minZ + maxZ) / 2);
+    const radius = Math.hypot(maxX - minX, maxZ - minZ, maxY) / 2 + 30;
+    mesh.boundingSphere = new THREE.Sphere(center.clone(), radius);
+    mesh.matrixAutoUpdate = false;
+    group.add(mesh);
+    tiles.push({ mesh, center, radius, n: idx.length });
+  }
+  return { group, tiles };
+}
+
 // ------------------------------------------------------------------ rooftop units
 export function createRoofUnits(sec) {
-  const geo = new THREE.BoxGeometry(1, 1, 1);
-  geo.translate(0, 0.5, 0);
   const mat = new THREE.MeshStandardMaterial({ color: 0xb8b8b2, roughness: 0.7, metalness: 0.2 });
-  const inst = new THREE.InstancedMesh(geo, mat, sec.n);
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
+  const q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
-  const col = new THREE.Color();
-  for (let i = 0; i < sec.n; i++) {
+  const dv = sec.dv;
+  const X = (i) => dv.getInt16(i * 10, true) / 2;
+  const Z = (i) => dv.getInt16(i * 10 + 2, true) / 2;
+  // closed box: these cast shadows, and the shadow pass draws back faces (the bottom)
+  const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+  const res = tiledInstances(sec.n, X, Z, box, mat, (i, m4, col) => {
     const o = i * 10;
-    const dv = sec.dv;
-    p.set(dv.getInt16(o, true) / 2, dv.getUint16(o + 4, true) / 10, dv.getInt16(o + 2, true) / 2);
+    const y = dv.getUint16(o + 4, true) / 10;
+    p.set(X(i), y, Z(i));
     s.set(dv.getUint8(o + 6) / 4, dv.getUint8(o + 8) / 8, dv.getUint8(o + 7) / 4);
     q.setFromAxisAngle(up, dv.getUint8(o + 9) / 255 * Math.PI);
     m4.compose(p, q, s);
-    inst.setMatrixAt(i, m4);
     const v = 0.6 + ((i * 2654435761) % 1000) / 2500;
     col.setRGB(v, v, v * 0.98);
-    inst.setColorAt(i, col);
-  }
-  inst.castShadow = true;
-  inst.receiveShadow = true;
-  inst.computeBoundingSphere();
-  return inst;
+    return y + s.y;
+  });
+  for (const t of res.tiles) { t.mesh.castShadow = true; t.mesh.receiveShadow = true; }
+  return res;
 }
 
 // ------------------------------------------------------------------ signs
@@ -419,6 +514,7 @@ export function createSigns(sec) {
         vec4 mv = viewMatrix * vec4(wp, 1.0);
         vFade = 1.0 - smoothstep(2500.0, 6000.0, -mv.z);
         gl_Position = projectionMatrix * mv;
+        if (vFade < 0.01) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // skip rasterising far signs
       }`,
     fragmentShader: /* glsl */`
       uniform sampler2D uAtlas;
@@ -488,9 +584,6 @@ export function createSigns(sec) {
 
 // ------------------------------------------------------------------ distant sprawl
 export function createSprawl(far) {
-  const n = far.nBoxes;
-  const geo = new THREE.BoxGeometry(1, 1, 1);
-  geo.translate(0, 0.5, 0);
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uNight = U.uNight;
@@ -502,6 +595,7 @@ export function createSprawl(far) {
       .replace('#include <common>', `#include <common>
         varying vec3 vSW; uniform float uNight;
         float sh(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }`)
+      .replace('#include <normal_fragment_begin>', SAFE_NORMAL_BEGIN)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         vec3 cell = floor(vSW / vec3(4.0, 3.2, 4.0));
         float on = step(0.72, sh(cell));
@@ -509,26 +603,21 @@ export function createSprawl(far) {
         totalEmissiveRadiance += mix(vec3(1.0, 0.7, 0.4), vec3(0.85, 0.92, 1.0), step(0.6, warm)) * on * uNight * 0.55;`);
   };
   mat.customProgramCacheKey = () => 'tokyo-sprawl';
-  const inst = new THREE.InstancedMesh(geo, mat, n);
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-  const col = new THREE.Color();
+  const q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
-  for (let i = 0; i < n; i++) {
-    const o = i * 6;
-    const x = far.boxes.getInt16(o, true) * 4;
-    const z = far.boxes.getInt16(o + 2, true) * 4;
-    const h = far.boxes.getUint8(o + 4);
-    const sz = far.boxes.getUint8(o + 5);
-    p.set(x, 0, z);
+  const X = (i) => far.boxes.getInt16(i * 6, true) * 4;
+  const Z = (i) => far.boxes.getInt16(i * 6 + 2, true) * 4;
+  const res = tiledInstances(far.nBoxes, X, Z, openBox(), mat, (i, m4, col) => {
+    const h = far.boxes.getUint8(i * 6 + 4);
+    const sz = far.boxes.getUint8(i * 6 + 5);
+    p.set(X(i), 0, Z(i));
     q.setFromAxisAngle(up, rnd(i) * Math.PI);
     s.set(sz, h, sz * (0.6 + rnd(i + 3) * 0.8));
     m4.compose(p, q, s);
-    inst.setMatrixAt(i, m4);
     const v = 0.62 + rnd(i + 11) * 0.3;
     col.setRGB(v, v * 0.98, v * 0.95);
-    inst.setColorAt(i, col);
-  }
-  inst.computeBoundingSphere();
-  inst.receiveShadow = false;
-  return inst;
+    return h;
+  }, { tile: 9000, height: 60 });
+  for (const t of res.tiles) t.mesh.receiveShadow = false;
+  return res;
 }

@@ -1,14 +1,16 @@
-// Post-processing chain: [render] -> [N8AO] -> aerial-perspective height fog ->
-// bloom + vignette + ACES tone mapping (+ SMAA when MSAA is off).
+// Post-processing chain: [render] -> [N8AO] -> aerial-perspective height fog (+ NaN scrub) ->
+// bloom + vignette + ACES tone mapping -> [FXAA when MSAA is off].
 import * as THREE from 'three';
 import {
-  EffectComposer, RenderPass, EffectPass, Effect, EffectAttribute, BloomEffect, ToneMappingEffect,
-  ToneMappingMode, VignetteEffect, FXAAEffect,
+  EffectComposer, RenderPass, EffectPass, Effect, EffectAttribute, BlendFunction, BloomEffect,
+  ToneMappingEffect, ToneMappingMode, VignetteEffect, FXAAEffect,
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { U } from './env.js';
+import { BAD_COLOR_GLSL } from './glsl.js';
 
 const fogFrag = /* glsl */`
+${BAD_COLOR_GLSL}
 uniform mat4 uInvProj;
 uniform mat4 uCamWorld;
 uniform vec3 uCam;
@@ -25,7 +27,7 @@ uniform float uDusk;
 void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
   vec3 col = inputColor.rgb;
   // a single NaN would be smeared over huge areas by the mip-chain bloom
-  if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
+  if (badColor(col)) col = vec3(0.0);
   col = min(col, vec3(60.0));
   if (depth < 0.999999) {
     vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
@@ -48,13 +50,17 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
     fc = mix(fc, mix(uHorizon, uZenith, 0.25), clamp(-rd.y, 0.0, 1.0) * 0.3);
     col = mix(col, fc, fog);
   }
-  outputColor = vec4(col * uExposure, inputColor.a);
+  col *= uExposure;
+  if (badColor(col)) col = vec3(0.0);
+  outputColor = vec4(col, inputColor.a);
 }
 `;
 
 class AerialFogEffect extends Effect {
   constructor(camera) {
     super('AerialFogEffect', fogFrag, {
+      // SRC: the default NORMAL blend mix()es with the raw input and would bring NaN back
+      blendFunction: BlendFunction.SRC,
       attributes: EffectAttribute.DEPTH,
       uniforms: new Map([
         ['uInvProj', new THREE.Uniform(new THREE.Matrix4())],
@@ -102,12 +108,17 @@ export class Post {
         this.ao.configuration.halfRes = true;
         this.ao.configuration.gammaCorrection = false;
         this.ao.setQualityMode('Low');
+        // our transparent objects are additive lights; without this N8AO re-renders the
+        // scene twice more every frame and traverses it four times
+        this.ao.autoDetectTransparency = false;
+        this.ao.configuration.transparencyAware = false;
         this.composer.addPass(this.ao);
       } catch (e) {
         console.warn('N8AO unavailable', e);
         this.ao = null;
       }
     }
+    // the fog pass also scrubs NaN/Inf, so it stays separate: bloom must only see its output
     this.fog = new AerialFogEffect(camera);
     this.composer.addPass(new EffectPass(camera, this.fog));
 
@@ -121,14 +132,19 @@ export class Post {
     });
     this.vignette = new VignetteEffect({ offset: 0.55, darkness: 0.32 });
     this.tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
-    const effects = [this.bloom, this.vignette, this.tone];
-    // (SMAA conflicts with the extra reflection render target; MSAA or FXAA instead)
-    if (!msaa) effects.push(new FXAAEffect());
-    this.composer.addPass(new EffectPass(camera, ...effects));
+    this.composer.addPass(new EffectPass(camera, this.bloom, this.vignette, this.tone));
+    // (SMAA conflicts with the extra reflection render target; MSAA or FXAA instead.)
+    // FXAA gets its own pass after tone mapping: merged with the HDR effects, the bright
+    // gradient around the sun reads as an edge and leaves hard-edged arcs in the sky.
+    if (!msaa) this.composer.addPass(new EffectPass(camera, new FXAAEffect()));
   }
 
   setSize(w, h) {
     this.composer.setSize(w, h);
+  }
+
+  dispose() {
+    this.composer.dispose();
   }
 
   update(camera, night) {

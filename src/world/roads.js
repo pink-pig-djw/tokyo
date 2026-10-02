@@ -2,6 +2,7 @@
 // expressway lighting, wet asphalt, plus elevated-deck pillars.
 import * as THREE from 'three';
 import { U } from '../core/env.js';
+import { SAFE_NORMAL_BEGIN } from '../core/glsl.js';
 
 function roadMaterial(rail) {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0, flatShading: true });
@@ -100,6 +101,7 @@ function roadMaterial(rail) {
         }
         c = mix(c, vec3(0.92, 0.93, 0.96), uSnow * (part == 0 ? 0.55 : 0.3));
         diffuseColor.rgb = c;`)
+      .replace('#include <normal_fragment_begin>', SAFE_NORMAL_BEGIN)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = rough;')
       .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance = emis;');
   };

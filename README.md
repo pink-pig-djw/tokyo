@@ -25,6 +25,27 @@ npm run build      # dist/index.html (single file) + dist/data/
 node tools/make_artifact.mjs   # artifact/ page body + base64 data files
 ```
 
+## Performance
+
+The default quality comes from the GPU name (discrete → high, integrated → medium, older
+integrated / mobile / software → low) and steps down by itself if the first seconds run below
+~28 fps; a level picked in the time bar is remembered. What the levels change:
+
+| | high | medium | low |
+| --- | --- | --- | --- |
+| anti-aliasing | MSAA ×4 | FXAA | FXAA |
+| ambient occlusion (N8AO) | ✓ | – | – |
+| water reflections | 40 % res. | 25 % res. | – |
+| sun shadows | 4096² | 2048² | – |
+| street trees drawn | 100 % | 60 % | 35 % |
+| draw distance: small buildings / trees | 7.5 / 4.2 km | 5.2 / 2.8 km | 3.6 / 1.8 km |
+
+The shadow map is only re-rendered when the view or the sun has moved enough to show; trees
+and roof units are instanced per 1.5 km tile (the outer sprawl per 9 km) so they are frustum- and
+distance-culled. Headless helpers (SwiftShader): `tools/profile.mjs` (render calls, draws,
+triangles per frame), `tools/frametime.mjs` (frame time, optionally with parts switched off) and
+`tools/nanscan.mjs` (non-finite pixels after each post pass).
+
 ## Rebuild the data
 
 ```bash

@@ -54,6 +54,7 @@ attribute vec3 aSize;    // length, height, width
 uniform sampler2D uRouteTex;
 uniform float uTexW;
 uniform float uTime;
+uniform float uMaxDist;
 varying vec3 vLocal;
 varying float vSeed;
 varying float vFade;
@@ -81,13 +82,17 @@ void walk() {
   gRight = r;
   gPos = p - r * aCar.y;   // keep left
   vFade = smoothstep(0.0, 25.0, s) * smoothstep(0.0, 25.0, L - s);
+  // beyond the LOD distance the instance collapses to a point (no rasterisation)
+  vFade *= step(distance(gPos, cameraPosition), uMaxDist);
   vSeed = aCar.z;
 }
 `;
 
 function vehicleMaterial(kind, routeTex, W) {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.4 });
+  mat.userData.maxDist = { value: 1e9 };
   mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uMaxDist = mat.userData.maxDist;
     shader.uniforms.uRouteTex = { value: routeTex };
     shader.uniforms.uTexW = { value: W };
     shader.uniforms.uTime = U.uTime;
@@ -143,8 +148,12 @@ function vehicleMaterial(kind, routeTex, W) {
 export function createTraffic(data, quality) {
   const { tex, W, info } = packRoutes(data);
   const group = new THREE.Group();
+  const lodMats = [];
+  group.userData.setLod = (lod) => {
+    for (const [m, kind] of lodMats) m.userData.maxDist.value = kind === 'ped' ? lod.ped : kind === 'train' ? lod.car * 2.2 : lod.car;
+  };
   const rnd = (i) => Math.abs(Math.sin(i * 12.9898 + 78.233) * 43758.5453) % 1;
-  const density = quality.level === 'low' ? 0.5 : quality.level === 'medium' ? 0.8 : 1;
+  const density = 1;
 
   // ---------------------------------------------------------------- cars
   const SPACING = { 1: 38, 2: 55, 3: 65, 4: 90 };
@@ -188,6 +197,7 @@ export function createTraffic(data, quality) {
     geo.setAttribute('aStripe', new THREE.InstancedBufferAttribute(aStripe, 3));
     geo.instanceCount = n;
     const mesh = new THREE.Mesh(geo, vehicleMaterial('car', tex, W));
+    lodMats.push([mesh.material, 'car']);
     mesh.frustumCulled = false;
     group.add(mesh);
     group.userData.cars = n;
@@ -235,6 +245,7 @@ export function createTraffic(data, quality) {
     geo.setAttribute('aStripe', new THREE.InstancedBufferAttribute(aStripe, 3));
     geo.instanceCount = n;
     const mesh = new THREE.Mesh(geo, vehicleMaterial('train', tex, W));
+    lodMats.push([mesh.material, 'train']);
     mesh.frustumCulled = false;
     mesh.castShadow = false;
     group.add(mesh);
@@ -274,6 +285,7 @@ export function createTraffic(data, quality) {
     geo.setAttribute('aStripe', new THREE.InstancedBufferAttribute(aStripe, 3));
     geo.instanceCount = n;
     const mesh = new THREE.Mesh(geo, vehicleMaterial('ped', tex, W));
+    lodMats.push([mesh.material, 'ped']);
     mesh.frustumCulled = false;
     group.add(mesh);
     group.userData.pedestrians = n;

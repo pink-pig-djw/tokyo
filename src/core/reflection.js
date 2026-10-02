@@ -22,7 +22,14 @@ export class PlanarReflection {
     this._q = new THREE.Vector4();
   }
 
+  setScale(scale) {
+    this.scale = scale;
+    this.uniforms.uReflStrength.value = scale > 0 ? 1 : 0;
+    if (this._w) this.setSize(this._w, this._h);
+  }
+
   setSize(w, h) {
+    this._w = w; this._h = h;
     if (!this.scale) return;
     this.rt.setSize(Math.max(64, Math.floor(w * this.scale)), Math.max(64, Math.floor(h * this.scale)));
   }
@@ -43,7 +50,7 @@ export class PlanarReflection {
     rc.up.copy(up);
     rc.lookAt(rc.position.clone().add(fwd));
     rc.near = camera.near;
-    rc.far = camera.far;
+    rc.far = Math.min(camera.far, 14000);   // distant reflections are lost in the haze anyway
     rc.fov = camera.fov;
     rc.aspect = camera.aspect;
     rc.updateMatrixWorld();
@@ -70,13 +77,16 @@ export class PlanarReflection {
     const skyPos = sky.position.clone();
     sky.position.copy(rc.position);
     const prevAuto = r.shadowMap.autoUpdate;
+    const prevNeeds = r.shadowMap.needsUpdate;
     r.shadowMap.autoUpdate = false;
+    r.shadowMap.needsUpdate = false;     // the shadow map is refreshed by the main pass only
     const prevTarget = r.getRenderTarget();
     r.setRenderTarget(this.rt);
     r.clear();
     r.render(scene, rc);
     r.setRenderTarget(prevTarget);
     r.shadowMap.autoUpdate = prevAuto;
+    r.shadowMap.needsUpdate = prevNeeds;
     sky.position.copy(skyPos);
     this.hidden.forEach((o, i) => { o.visible = vis[i]; });
   }

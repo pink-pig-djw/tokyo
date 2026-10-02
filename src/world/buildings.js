@@ -7,6 +7,7 @@
 // tenant-by-floor zakkyo buildings, TV flicker and coloured LED accents.
 import * as THREE from 'three';
 import { U } from '../core/env.js';
+import { SAFE_NORMAL_BEGIN } from '../core/glsl.js';
 
 const FACADE_PARS = /* glsl */`
 uniform float uNight;
@@ -347,6 +348,7 @@ export function buildingMaterial(manifest) {
         vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${FACADE_PARS}`)
+      .replace('#include <normal_fragment_begin>', SAFE_NORMAL_BEGIN)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float fRough, fMetal; vec3 fEmis;
         vec4 fac = facade(fRough, fMetal, fEmis);

@@ -137,6 +137,7 @@ export class UI {
 
   dismissLoader() {
     document.body.classList.add('loaded');
+    this.app.reveal();   // rendering starts only once the loading screen goes away
     if (window.innerWidth > 760) this.setRail(true);
   }
 
@@ -253,30 +254,33 @@ export class UI {
     $('sunband').style.background = `linear-gradient(90deg, ${stops.join(',')})`;
   }
 
-  update() {
+  _updateHud() {
     const app = this.app;
     const cam = app.camera;
+    const put = (id, text) => { const el = $(id); if (el._t !== text) { el._t = text; el.textContent = text; } };
     // clock
     const h = jstHours(app.env.date);
     const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
-    $('clock').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    put('clock', `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`);
     const jst = new Date(app.env.date.valueOf() + 9 * 3600e3);
-    $('dateLine').textContent = `JST · ${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, '0')}-${String(jst.getUTCDate()).padStart(2, '0')}`;
-    if (document.activeElement !== $('timeSlider')) $('timeSlider').value = String(h);
+    put('dateLine', `JST · ${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, '0')}-${String(jst.getUTCDate()).padStart(2, '0')}`);
+    if (document.activeElement !== $('timeSlider')) {
+      const v = h.toFixed(2);
+      if ($('timeSlider')._t !== v) { $('timeSlider')._t = v; $('timeSlider').value = v; }
+    }
 
     // HUD
     const o = app.manifest.origin;
     const tgt = app.director.mode === 'fly' ? cam.position : app.controls.target;
     const lat = o.lat - tgt.z / o.ky, lon = o.lon + tgt.x / o.kx;
-    $('hLat').textContent = `${lat.toFixed(4)}°N`;
-    $('hLon').textContent = `${lon.toFixed(4)}°E`;
-    $('hAlt').textContent = `${Math.round(cam.position.y)} m`;
+    put('hLat', `${lat.toFixed(4)}°N`);
+    put('hLon', `${lon.toFixed(4)}°E`);
+    put('hAlt', `${Math.round(cam.position.y)} m`);
     const dir = cam.getWorldDirection(this._v);
     let hdg = Math.atan2(dir.x, -dir.z) * 180 / Math.PI;
     if (hdg < 0) hdg += 360;
     const names = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-    $('hHdg').textContent = `${Math.round(hdg)}° ${names[Math.round(hdg / 45) % 8]}`;
-    $('needle').setAttribute('transform', `rotate(${-hdg})`);
+    put('hHdg', `${Math.round(hdg)}° ${names[Math.round(hdg / 45) % 8]}`);
     const now = performance.now();
     if (now - this.lastWardCheck > 500) {
       this.lastWardCheck = now;
@@ -284,9 +288,29 @@ export class UI {
       for (const w of app.manifest.wards) {
         if (w.rings.some((r) => pointInRing(tgt.x, tgt.z, r))) { ward = w; break; }
       }
+      const html = ward
+        ? `${ward.ja}<small>${ward.en.replace(' Ku', '-ku').replace(' Shi', '-shi')}</small>`
+        : tgt.z > 3000 && tgt.x > -3000 ? '東京湾<small>Tokyo Bay</small>' : '首都圏<small>Greater Tokyo</small>';
       const el = $('ward');
-      if (ward) el.innerHTML = `${ward.ja}<small>${ward.en.replace(' Ku', '-ku').replace(' Shi', '-shi')}</small>`;
-      else el.innerHTML = tgt.z > 3000 && tgt.x > -3000 ? '東京湾<small>Tokyo Bay</small>' : '首都圏<small>Greater Tokyo</small>';
+      if (el._t !== html) { el._t = html; el.innerHTML = html; }
+    }
+  }
+
+  update(dt) {
+    const app = this.app;
+    const cam = app.camera;
+    // HUD text a few times a second: per-frame DOM writes cost more than they show
+    this._hudT = (this._hudT || 0) + (dt ?? 1);
+    if (this._hudT >= 0.15) {
+      this._hudT = 0;
+      this._updateHud();
+    }
+    const dir = cam.getWorldDirection(this._v);
+    let hdg = Math.atan2(dir.x, -dir.z) * 180 / Math.PI;
+    if (hdg < 0) hdg += 360;
+    if (Math.abs(hdg - (this._needle ?? -1)) > 0.3) {
+      this._needle = hdg;
+      $('needle').setAttribute('transform', `rotate(${(-hdg).toFixed(1)})`);
     }
 
     // labels
@@ -316,11 +340,14 @@ export class UI {
         continue;
       }
       placed.push(box);
-      L.el.style.display = '';
-      const fade = THREE.MathUtils.clamp((maxD - d) / (maxD * 0.3), 0, 1);
-      L.el.style.opacity = String(fade);
-      L.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
-      L.el.style.zIndex = String(100000 - Math.round(d));
+      const st = L.el.style;
+      if (st.display === 'none') st.display = '';
+      const fade = THREE.MathUtils.clamp((maxD - d) / (maxD * 0.3), 0, 1).toFixed(2);
+      if (L._o !== fade) { L._o = fade; st.opacity = fade; }
+      const tr = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+      if (L._tr !== tr) { L._tr = tr; st.transform = tr; }
+      const z = String(100000 - Math.round(d / 10) * 10);
+      if (L._z !== z) { L._z = z; st.zIndex = z; }
     }
   }
 }
