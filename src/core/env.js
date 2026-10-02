@@ -30,6 +30,7 @@ export const U = {
   uFuji: { value: new THREE.Vector4(0, 0, 0, 0) }, // azimuth, elevation, half-width, visibility
   uExposure: { value: 1 },
   uDbgEmis: { value: 1 },
+  uWinLod: { value: 0 },        // 1 = resolve windows earlier into averages (no-MSAA)
 };
 
 // sky palette keyframes by sun elevation (degrees)
@@ -131,9 +132,9 @@ export class Environment {
     this.pal.horizon.multiplyScalar(1 - overcast * 0.25);
 
     // Tokyo light pollution: warm skyglow near the horizon at night
-    _c1.setRGB(0.028, 0.02, 0.03).multiplyScalar(night * (1 + overcast * 2.5));
+    _c1.setRGB(0.026, 0.019, 0.026).multiplyScalar(night * (1 + overcast * 0.9));
     this.pal.horizon.add(_c1);
-    _c1.setRGB(0.006, 0.005, 0.007).multiplyScalar(night * (1 + overcast * 3));
+    _c1.setRGB(0.006, 0.005, 0.007).multiplyScalar(night * (1 + overcast * 1.5));
     this.pal.zenith.add(_c1);
 
     U.uZenith.value.copy(this.pal.zenith);
@@ -163,7 +164,7 @@ export class Environment {
 
     // fog / haze
     const fogBase = 0.00010 + 0.00005 * night;
-    U.uFogDensity.value = fogBase * (1 + this._wet * 5 + this._snow * 7);
+    U.uFogDensity.value = fogBase * (1 + this._wet * 4 + this._snow * 3.2);
     U.uFogFalloff.value = 1 / (700 + 600 * overcast);
 
     // lights

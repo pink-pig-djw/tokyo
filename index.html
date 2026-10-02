@@ -131,6 +131,10 @@
     .lbl .stem { width: 1px; height: 26px; background: linear-gradient(var(--paper), transparent); opacity: .7; }
     .lbl:hover .card { border-color: var(--ice); }
 
+    #toast { position: fixed; z-index: 30; left: 50%; top: calc(18px + env(safe-area-inset-top, 0px)); transform: translate(-50%, -10px); padding: 8px 14px; border-radius: 8px;
+      font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .4s, transform .4s; }
+    #toast.on { opacity: 1; transform: translate(-50%, 0); }
+
     /* ---------- loader / help ---------- */
     #loader { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: radial-gradient(120% 90% at 50% 100%, #1b2233 0%, var(--ink) 60%); transition: opacity 1s; }
     body.loaded #loader { opacity: 0; pointer-events: none; visibility: hidden; transition: opacity 1s, visibility 0s 1s; }

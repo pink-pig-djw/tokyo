@@ -58,6 +58,12 @@ function roadMaterial(rail) {
           c = mix(c, vec3(0.55, 0.55, 0.56), rails * detail);
           rough = mix(0.9, 0.3, rails);
           if (code == 22) c = vec3(0.6, 0.6, 0.58); // guideway concrete (Yurikamome / monorail)
+        } else if (code == 9) {
+          // zebra crossing: bars parallel to the traffic, 45 cm apart
+          c = vec3(0.19, 0.19, 0.2);
+          float bar = step(0.5, fract(u / 0.9)) * step(abs(v), 0.9);
+          c = mix(c, vec3(0.86, 0.86, 0.83), bar * detail);
+          emis += vec3(1.0, 0.85, 0.65) * 0.05 * uNight * bar;
         } else if (code == 8) {
           c = vec3(0.58, 0.55, 0.5);              // pedestrian street paving
           c *= 0.92 + 0.08 * step(0.5, fract(u * 0.5) + fract(v * 2.0));

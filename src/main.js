@@ -8,6 +8,7 @@ import { createGround } from './world/ground.js';
 import { buildingMaterial, createChunkMeshes } from './world/buildings.js';
 import { fetchBinary, fetchJSON, parseGround, parseFar, parseExtras, parseRoutes } from './data/loader.js';
 import { createTraffic } from './world/traffic.js';
+import { Weather } from './world/weather.js';
 import { createRoads } from './world/roads.js';
 import { createLandmarks, makeLL } from './world/landmarks.js';
 import { Director } from './core/director.js';
@@ -33,7 +34,9 @@ function detectQuality(forced) {
     ao: level !== 'low' && !params.has('noao'),
     shadows: level !== 'low' && !params.has('noshadow'),
     shadowSize: level === 'high' ? 4096 : 2048,
-    dpr: Math.min(window.devicePixelRatio, level === 'high' ? 1.75 : level === 'medium' ? 1.25 : 1),
+    // cap the pixel count so 4K / retina screens stay smooth
+    dpr: Math.min(window.devicePixelRatio, level === 'high' ? 1.6 : level === 'medium' ? 1.25 : 1,
+      Math.sqrt((level === 'high' ? 4.8e6 : level === 'medium' ? 3.0e6 : 1.8e6) / (window.innerWidth * window.innerHeight))),
   };
 }
 
@@ -45,6 +48,7 @@ export class App {
       preserveDrawingBuffer: params.has('shot'),
     });
     this.renderer.setPixelRatio(this.quality.dpr);
+    U.uWinLod.value = this.quality.msaa ? 0 : 1;
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.shadowMap.enabled = this.quality.shadows;
@@ -63,9 +67,21 @@ export class App {
     this.controls.maxDistance = 30000;
     this.controls.zoomToCursor = true;
     this.controls.screenSpacePanning = false;
+    // slow cinematic drift until the viewer touches anything
+    this.controls.autoRotate = !params.has('shot');
+    this.controls.autoRotateSpeed = 0.35;
+    this.controls.addEventListener('start', () => { this.controls.autoRotate = false; });
 
     this.env = new Environment();
     if (params.has('t')) this.env.setHours(parseFloat(params.get('t')));
+    if (params.has('w')) {
+      // test hook: start fully in a weather state
+      this.env.setWeather(params.get('w'));
+      this.env._wet = this.env.weather === 'rain' ? 1 : 0;
+      this.env._snow = this.env.weather === 'snow' ? 1 : 0;
+      this.env._cloud = this.env.weather === 'clear' ? 0.3 : 0.95;
+    }
+    if (params.has('season')) this.env.setSeason(params.get('season'));
 
     // lights
     this.sun = new THREE.DirectionalLight(0xffffff, 3);
@@ -89,7 +105,10 @@ export class App {
     this.envRT = null;
     this.lastEnvKey = '';
 
+    this.weather = new Weather(this.scene);
+    if (params.has('w') || params.has('season')) this.weather.instant = true;
     this.post = new Post(this.renderer, this.scene, this.camera, this.quality);
+    this.perf = { acc: 0, n: 0, wait: 0, armed: false };
     this.reflection = new PlanarReflection(this.renderer,
       params.has('norefl') ? 0 : this.quality.level === 'high' ? 0.5 : this.quality.level === 'medium' ? 0.33 : 0);
     this.pool = new WorkerPool(Math.min(4, Math.max(2, (navigator.hardwareConcurrency || 4) - 1)));
@@ -136,7 +155,7 @@ export class App {
     });
     const extrasP = fetchBinary('extras.bin.gz').then((buf) => {
       const ex = parseExtras(buf);
-      this.trees = createTrees(ex.trees, this.quality);
+      this.trees = createTrees(ex.trees, this.quality, this.ll);
       this.lamps = createLamps(ex.lamps);
       this.aviation = createAviation(ex.aviation);
       this.roofUnits = createRoofUnits(ex.roofUnits);
@@ -167,16 +186,38 @@ export class App {
     this.ready = true;
   }
 
+  /** Step quality down if the first seconds after loading run slowly (unless the user chose). */
+  autoQuality(dt) {
+    const p = this.perf;
+    if (!p.armed || params.has('q') || storedQuality()) return;
+    p.wait += dt;
+    if (p.wait < 1.5) return;
+    p.acc += dt; p.n++;
+    if (p.acc < 4) return;
+    const fps = p.n / p.acc;
+    p.acc = 0; p.n = 0; p.wait = 0;
+    const lv = this.quality.level;
+    if (fps < 27 && lv !== 'low') {
+      const next = lv === 'high' ? 'medium' : 'low';
+      this.setQuality(next, false);
+      this.ui?.toast(`帧率约 ${Math.round(fps)} fps，已自动切换到${next === 'medium' ? '中' : '低'}画质`);
+      this.ui?.syncQuality(next);
+    } else {
+      p.armed = lv !== 'low' && fps < 40;   // keep watching only while marginal
+    }
+  }
+
   startTour() {
     this.ui.dismissLoader();
     this.tour.start(0);
   }
 
-  setQuality(level) {
-    try { localStorage.setItem('tokyo3d.quality', level); } catch (e) { /* private mode */ }
+  setQuality(level, remember = true) {
+    if (remember) { try { localStorage.setItem('tokyo3d.quality', level); } catch (e) { /* private mode */ } }
     const q = detectQuality(level);
     this.quality = q;
     this.renderer.setPixelRatio(q.dpr);
+    U.uWinLod.value = q.msaa ? 0 : 1;
     this.renderer.shadowMap.enabled = q.shadows;
     this.sun.castShadow = q.shadows;
     this.reflection.scale = q.level === 'high' ? 0.5 : q.level === 'medium' ? 0.33 : 0;
@@ -254,6 +295,8 @@ export class App {
 
     const { night } = this.env.update(dt, this.sun, this.moon, this.hemi, this.camera);
     this.sky.position.copy(this.camera.position);
+    this.weather.update(dt, this.env, this.camera.position.y);
+    this.autoQuality(dt);
     if (this.manifest) { this.updateFuji(); this.updateSeasonalLights(); }
     this.updateShadow();
     this.updateEnvMap(false);
@@ -303,6 +346,7 @@ app.load((p, label) => {
   app.tour = new Tour(app, app.director, PLACES, app.ui);
   app.ui.init();
   document.body.classList.add('ready');
+  app.perf.armed = true;
   const l = document.getElementById('loadlabel');
   if (l) l.textContent = '城市已就绪';
   if (params.has('shot')) { document.body.classList.add('shot'); app.ui.dismissLoader(); }

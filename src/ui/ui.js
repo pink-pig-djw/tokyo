@@ -117,6 +117,24 @@ export class UI {
     $('startFree').addEventListener('click', () => { this.dismissLoader(); });
   }
 
+  toast(msg) {
+    let t = document.getElementById('toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'toast';
+      t.className = 'glass';
+      document.body.append(t);
+    }
+    t.textContent = msg;
+    t.classList.add('on');
+    clearTimeout(this._toastT);
+    this._toastT = setTimeout(() => t.classList.remove('on'), 4200);
+  }
+
+  syncQuality(v) {
+    $('segQuality').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+  }
+
   dismissLoader() {
     document.body.classList.add('loaded');
     if (window.innerWidth > 760) this.setRail(true);
@@ -208,7 +226,12 @@ export class UI {
 
   setTourActive(on) {
     document.body.classList.toggle('touring', on);
-    if (on && window.innerWidth <= 1100) this.setRail(false);
+    if (on) {
+      this._railWasOpen = !document.getElementById('rail').classList.contains('collapsed');
+      this.setRail(false);
+    } else if (this._railWasOpen) {
+      this.setRail(true);
+    }
   }
 
   _drawSunband() {

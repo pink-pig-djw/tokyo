@@ -19,10 +19,11 @@ uniform vec3 uWallPal[36];
 uniform vec3 uRoofPal[16];
 uniform vec3 uGlassPal[10];
 uniform float uDbgEmis;
+uniform float uWinLod;
 varying vec3 vWPos;
 varying float vU;
-varying vec4 vInfo;
-varying vec4 vInfo2;
+flat varying vec4 vInfo;
+flat varying vec4 vInfo2;
 
 float fh11(float n) { return fract(sin(n * 127.1) * 43758.5453); }
 float fh21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -61,7 +62,7 @@ vec4 facade(out float rough, out float metal, out vec3 emis) {
   float minh = float(fl >> 8);
   int flags = fl & 255;
   int arch = int(vInfo2.z + 0.5);
-  float R = vInfo2.w;
+  float R = floor(vInfo2.w + 0.5);
   float r1 = fh11(R * 0.0137 + 0.31), r2 = fh11(R * 0.0291 + 1.7), r3 = fh11(R * 0.0419 + 2.9);
   float r4 = fh11(R * 0.0533 + 4.1), r5 = fh11(R * 0.0617 + 5.3), r6 = fh11(R * 0.0743 + 6.7);
   float r7 = fh11(R * 0.0871 + 7.9), r8 = fh11(R * 0.0997 + 9.1);
@@ -146,7 +147,7 @@ vec4 facade(out float rough, out float metal, out vec3 emis) {
   vec2 f = fract(cell);
   vec2 fw = fwidth(cell);
   float pix = max(fw.x, fw.y);
-  float far = smoothstep(0.3, 0.85, pix);
+  float far = smoothstep(0.3 - 0.12 * uWinLod, 0.85 - 0.3 * uWinLod, pix);
   float nFloors = floor((bh - minh - ground - podH) / floorH);
   float body = step(0.0, yy2) * step(y, bh - 1.2);
   bool topZone = topFl > 0.0 && id.y >= nFloors - topFl;
@@ -260,7 +261,7 @@ vec4 facade(out float rough, out float metal, out vec3 emis) {
   vec3 lit = mix(lc * wiN + cct(cctB) * ambientWin, farC * farLit, far);
   if (topZone || mech) lit = vec3(0.0);
   // lobby / mall podium: bright at street level, often brighter than the floors above
-  if (inPod) lit = cct(0.45 + 0.4 * r2) * win * (0.5 + 1.0 * step(0.4, r8)) * (zone ? 1.4 : 1.0);
+  if (inPod) lit = cct(0.2 + 0.5 * r2) * win * (0.18 + 0.5 * step(0.45, r8)) * (zone ? 1.3 : 1.0);
   float nightW = max(uNight, (mode == 1 && uLitOff > 0.3) ? 0.06 : 0.0);
   emis += lit * nightW;
 
@@ -328,7 +329,7 @@ export function buildingMaterial(manifest) {
     Object.assign(shader.uniforms, {
       uNight: U.uNight, uLitRes: U.uLitRes, uLitOff: U.uLitOff, uTime: U.uTime, uSnow: U.uSnow, uWet: U.uWet,
       uWallPal: { value: wallPal }, uRoofPal: { value: roofPal }, uGlassPal: { value: glassPal },
-      uDbgEmis: U.uDbgEmis,
+      uDbgEmis: U.uDbgEmis, uWinLod: U.uWinLod,
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
@@ -337,8 +338,8 @@ export function buildingMaterial(manifest) {
         attribute vec4 aInfo2;
         varying vec3 vWPos;
         varying float vU;
-        varying vec4 vInfo;
-        varying vec4 vInfo2;`)
+        flat varying vec4 vInfo;
+        flat varying vec4 vInfo2;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vU = aU * 0.1;
         vInfo = aInfo;

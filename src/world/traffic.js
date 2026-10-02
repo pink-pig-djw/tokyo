@@ -112,7 +112,7 @@ function vehicleMaterial(kind, routeTex, W) {
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec3 c = vBody;
         vec3 e = vec3(0.0);
-        ${kind === 'car' ? `
+        ${kind === 'ped' ? '' : kind === 'car' ? `
           float L = 4.4;
           float front = smoothstep(L * 0.5 - 0.06, L * 0.5, vLocal.x);
           float rear = smoothstep(-L * 0.5 + 0.06, -L * 0.5, vLocal.x);
@@ -151,7 +151,7 @@ export function createTraffic(data, quality) {
   const SPEED = { 1: 22, 2: 14, 3: 12, 4: 10 };
   const cars = [];
   info.forEach((r, ri) => {
-    if (r.kind === 2 || r.len < 50) return;
+    if (r.kind >= 2 || r.len < 50) return;
     const code = r.color;
     const n = Math.floor(r.len / SPACING[code] * density);
     for (let k = 0; k < n; k++) {
@@ -239,6 +239,44 @@ export function createTraffic(data, quality) {
     mesh.castShadow = false;
     group.add(mesh);
     group.userData.trainCars = n;
+  }
+  // ---------------------------------------------------------------- pedestrians
+  const peds = [];
+  info.forEach((r, ri) => {
+    if (r.kind !== 3 || r.len < 4) return;
+    const n = Math.round(r.len * (r.color / 10) * 0.9 * density);
+    for (let k = 0; k < n; k++) {
+      const seed = rnd(ri * 977 + k * 13);
+      peds.push([r.start, r.n, r.len, 1.0 + seed * 0.7, rnd(k * 7.7 + ri) * r.len, (rnd(k + ri * 3) - 0.5) * 3.2, seed, k % 2 ? 1 : -1]);
+    }
+  });
+  if (peds.length) {
+    const body = new THREE.CylinderGeometry(0.22, 0.2, 1, 6);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.index = body.index;
+    for (const k of ['position', 'normal', 'uv']) geo.setAttribute(k, body.attributes[k]);
+    const n = peds.length;
+    const aRoute = new Float32Array(n * 4), aCar = new Float32Array(n * 4), aSize = new Float32Array(n * 3);
+    const aColor = new Float32Array(n * 3), aStripe = new Float32Array(n * 3);
+    const CLOTHES = ['#1b1c20', '#26282e', '#3a3d44', '#e9e6df', '#2c3a55', '#5b4636', '#7d2a2a', '#c9b79c', '#111214', '#4a5a3a'];
+    const col = new THREE.Color();
+    peds.forEach((c, i) => {
+      aRoute.set([c[0], c[1], c[2], c[3]], i * 4);
+      aCar.set([c[4], c[5], c[6], c[7]], i * 4);
+      aSize.set([1, 1.55 + c[6] * 0.3, 1], i * 3);
+      col.set(CLOTHES[Math.floor(rnd(i * 3.3) * CLOTHES.length)]);
+      aColor.set([col.r, col.g, col.b], i * 3);
+    });
+    geo.setAttribute('aRoute', new THREE.InstancedBufferAttribute(aRoute, 4));
+    geo.setAttribute('aCar', new THREE.InstancedBufferAttribute(aCar, 4));
+    geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(aSize, 3));
+    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3));
+    geo.setAttribute('aStripe', new THREE.InstancedBufferAttribute(aStripe, 3));
+    geo.instanceCount = n;
+    const mesh = new THREE.Mesh(geo, vehicleMaterial('ped', tex, W));
+    mesh.frustumCulled = false;
+    group.add(mesh);
+    group.userData.pedestrians = n;
   }
   return group;
 }

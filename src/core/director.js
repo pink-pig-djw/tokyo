@@ -47,6 +47,7 @@ export class Director {
 
   setMode(mode) {
     if (mode === this.mode) return;
+    this.controls.autoRotate = false;
     if (this.mode === 'fly' && document.pointerLockElement) document.exitPointerLock();
     this.mode = mode;
     this.controls.enabled = mode === 'orbit';
@@ -72,6 +73,7 @@ export class Director {
   }
 
   flyTo(place, opts = {}) {
+    this.controls.autoRotate = false;
     const dest = this.resolve(place);
     const p0 = this.camera.position.clone();
     const t0 = this.controls.target.clone();

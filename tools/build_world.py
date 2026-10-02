@@ -153,6 +153,8 @@ for k in range(len(s_geom)):
     st, c = s_sub[k], s_cls[k]
     if st == "road":
         code = ROAD_CODE.get(c)
+        if c == "footway" and s_subcls[k] == "crosswalk":
+            code = 9
         if code is None:
             continue
         if s_subcls[k] in ("parking_aisle", "driveway"):
@@ -1112,7 +1114,25 @@ for key, gs in groups.items():
                 continue
             code = key[1]
             routes.append(dict(kind=0 if code == 1 else 1, color=code, pts=resample(p, 6.0)))
-log("routes", len(routes), "trains", sum(r["kind"] == 2 for r in routes))
+HOTSPOTS = [(139.70056, 35.65950, 160, 1.0), (139.70110, 35.69210, 220, 0.7), (139.70240, 35.69420, 220, 0.6),
+            (139.76470, 35.67160, 220, 0.6), (139.77130, 35.69960, 220, 0.6), (139.71210, 35.72990, 220, 0.6),
+            (139.77450, 35.71000, 200, 0.5), (139.79640, 35.71100, 200, 0.5), (139.75830, 35.66650, 200, 0.5),
+            (139.76700, 35.68120, 220, 0.5)]
+HOT_XY = [(*xn(lo, la), r, w) for lo, la, r, w in HOTSPOTS]
+n_ped = 0
+for L in lines:
+    if L["code"] != 9:
+        continue
+    c = L["coords"]
+    mid = c[len(c) // 2]
+    for hx, hn, r, w in HOT_XY:
+        if (mid[0] - hx) ** 2 + (mid[1] - hn) ** 2 < r * r:
+            g = shapely.LineString(np.c_[c, L["elev"]])
+            if 5 < g.length < 80:
+                routes.append(dict(kind=3, color=int(w * 10), pts=resample(g, 2.0)))
+                n_ped += 1
+            break
+log("routes", len(routes), "trains", sum(r["kind"] == 2 for r in routes), "pedestrian crossings", n_ped)
 obuf = bytearray(b"TKO1")
 obuf += struct.pack("<II", len(routes), sum(len(r["pts"]) for r in routes))
 rh = np.zeros(len(routes), np.dtype([("kind", "u1"), ("color", "u1"), ("n", "<u2")]))

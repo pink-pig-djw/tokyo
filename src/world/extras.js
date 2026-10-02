@@ -35,11 +35,19 @@ function treeGeometries() {
   return { broad, conifer };
 }
 
-function treeMaterial() {
+// famous hanami spots (lon, lat, radius m): trees here bloom in spring whatever their mapped type
+const HANAMI = [[139.7714, 35.7148, 420], [139.7445, 35.6905, 330], [139.6985, 35.6440, 230], [139.7100, 35.6852, 560],
+  [139.8030, 35.7130, 300], [139.7225, 35.6655, 450], [139.7442, 35.6942, 240], [139.7466, 35.7330, 280],
+  [139.7570, 35.6770, 280], [139.7520, 35.6830, 220], [139.7380, 35.6970, 240], [139.7590, 35.6600, 220],
+  [139.7880, 35.7100, 280], [139.7290, 35.6560, 200], [139.7880, 35.6930, 200]];
+
+function treeMaterial(ll) {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0 });
+  const spots = HANAMI.map(([lo, la, r]) => { const v = ll(lo, la); return new THREE.Vector3(v.x, v.z, r); });
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, {
       uTime: U.uTime, uSakura: U.uSakura, uAutumn: U.uAutumn, uSnow: U.uSnow, uNight: U.uNight,
+      uSpots: { value: spots },
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
@@ -48,18 +56,25 @@ function treeMaterial() {
         varying float vPart;
         varying float vType;
         varying float vSeed;
-        uniform float uTime;`)
+        varying float vHanami;
+        uniform float uTime;
+        uniform vec3 uSpots[${HANAMI.length}];`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vPart = aPart;
         vType = aType;
         vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
         vSeed = fract(sin(dot(ip.xz, vec2(12.9898, 78.233))) * 43758.5453);
+        vHanami = 0.0;
+        for (int i = 0; i < ${HANAMI.length}; i++) {
+          float d = length(ip.xz - uSpots[i].xy);
+          if (d < uSpots[i].z && fract(vSeed * 7.31) < 0.62 * (1.0 - d / uSpots[i].z * 0.5)) vHanami = 1.0;
+        }
         float sway = sin(uTime * 1.3 + ip.x * 0.05 + ip.z * 0.07) * 0.025 * aPart * transformed.y;
         transformed.x += sway;
         transformed.z += sway * 0.6;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying float vPart; varying float vType; varying float vSeed;
+        varying float vPart; varying float vType; varying float vSeed; varying float vHanami;
         uniform float uSakura; uniform float uAutumn; uniform float uSnow; uniform float uNight;`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         int t = int(vType + 0.5);
@@ -69,10 +84,13 @@ function treeMaterial() {
           vec3 g0 = vec3(0.13, 0.22, 0.09), g1 = vec3(0.07, 0.15, 0.07), g2 = vec3(0.24, 0.32, 0.1), g4 = vec3(0.17, 0.25, 0.1);
           if (t == 1) c = g1;
           else if (t == 2) c = mix(g2, vec3(0.86, 0.66, 0.1), uAutumn * (0.6 + 0.4 * vSeed));
-          else if (t == 3) c = mix(mix(g4, vec3(0.55, 0.22, 0.12), uAutumn * 0.7), vec3(1.0, 0.72, 0.8), uSakura);
+          else if (t == 3) c = mix(g4, vec3(0.55, 0.22, 0.12), uAutumn * 0.7);
           else if (t == 4) c = mix(g4, vec3(0.62, 0.32, 0.1), uAutumn * (0.5 + 0.5 * vSeed));
           else c = mix(g0, g0 * vec3(1.3, 1.05, 0.7), uAutumn * 0.3 * vSeed);
           c *= 0.8 + 0.4 * vSeed;
+          // somei-yoshino bloom: pale pink, almost white in full bloom
+          float bloom = uSakura * max(vHanami, t == 3 ? 1.0 : 0.0);
+          c = mix(c, mix(vec3(0.98, 0.62, 0.76), vec3(1.0, 0.8, 0.88), vSeed), bloom);
           c = mix(c, vec3(0.88, 0.9, 0.94), uSnow * 0.65 * smoothstep(0.0, 0.8, vNormal.y));
         }
         diffuseColor.rgb = c;`);
@@ -81,12 +99,12 @@ function treeMaterial() {
   return mat;
 }
 
-export function createTrees(sec, quality) {
+export function createTrees(sec, quality, ll) {
   const { broad, conifer } = treeGeometries();
   const step = quality.level === 'low' ? 3 : quality.level === 'medium' ? 2 : 1;
   const counts = [0, 0];
   for (let i = 0; i < sec.n; i += step) counts[sec.dv.getUint8(i * 6 + 4) === 1 ? 1 : 0]++;
-  const mat = treeMaterial();
+  const mat = treeMaterial(ll);
   const meshes = [new THREE.InstancedMesh(broad, mat, counts[0]), new THREE.InstancedMesh(conifer, mat, counts[1])];
   const types = [new Float32Array(counts[0]), new Float32Array(counts[1])];
   const k = [0, 0];
