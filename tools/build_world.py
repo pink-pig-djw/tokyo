@@ -38,6 +38,13 @@ def log(*a):
     print(f"[{time.time() - T0:6.1f}s]", *a, flush=True)
 
 
+# district specs (tools/districts/<name>.json): see "refined districts" below
+DISTRICT_SPECS = []
+for _fn in sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "districts", "*.json"))):
+    with open(_fn, encoding="utf-8") as _f:
+        DISTRICT_SPECS.append((os.path.splitext(os.path.basename(_fn))[0], json.load(_f)))
+
+
 def col(t, name):
     return t.column(name).to_numpy(zero_copy_only=False)
 
@@ -194,6 +201,39 @@ for k in range(len(s_geom)):
                       link=flag_fraction(fl, "is_link") > 0.5))
 log("transport lines", len(lines))
 
+# elevation profiles from the district specs: elevated lines running along a profile polyline
+# ([lon, lat, elevation m] points) take its interpolated elevation; lines crossing it (not
+# parallel) keep theirs, so a viaduct can be lifted without lifting the tracks passing below
+for _name, _spec in DISTRICT_SPECS:
+    for pr in _spec.get("profiles", []):
+        P = np.array([[*lonlat_to_xn(lo, la), e] for lo, la, e in pr["points"]], float)
+        pl = shapely.LineString(P[:, :2])
+        ps = np.r_[0, np.cumsum(np.linalg.norm(np.diff(P[:, :2], axis=0), axis=1))]
+        kind, codes, rad = pr.get("kind", "rail"), set(pr.get("codes") or []), float(pr.get("radius", 12))
+        nv = 0
+        for L in lines:
+            c = L["code"]
+            if (kind == "rail") != (c >= 20) or (codes and c not in codes):
+                continue
+            if L["elev"].max() <= 3 and not pr.get("include_ground"):
+                continue
+            pts = shapely.points(L["coords"])
+            m = shapely.distance(pl, pts) < rad
+            if not m.any():
+                continue
+            cc = L["coords"]
+            tan = np.gradient(cc, axis=0) if len(cc) > 1 else np.zeros_like(cc)
+            for k in np.where(m)[0]:
+                at = shapely.line_locate_point(pl, pts[k])
+                a = np.array(shapely.line_interpolate_point(pl, max(at - 2, 0)).coords[0])
+                b = np.array(shapely.line_interpolate_point(pl, min(at + 2, pl.length)).coords[0])
+                t1, t2 = tan[k], b - a
+                cosang = abs(t1 @ t2) / ((np.linalg.norm(t1) * np.linalg.norm(t2)) or 1)
+                if cosang > 0.85:
+                    L["elev"][k] = float(np.interp(at, ps, P[:, 2]))
+                    nv += 1
+        log("elevation profile", _name, pr.get("name", ""), "vertices", nv)
+
 # node reconciliation + ramp smoothing so elevated expressways blend into the ground network
 node_vals = collections.defaultdict(list)
 
@@ -322,8 +362,7 @@ log("viaduct clearance: lowered", lowered, "inferred buildings; mapped-height ov
 # exported), height corrections, LED screens, sign streets and street features.
 drop = np.zeros(NB, bool)
 districts = []
-_spec_files = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "districts", "*.json")))
-if _spec_files:
+if DISTRICT_SPECS:
     _bids = pq.read_table(os.path.join(RAW, "building.parquet"), columns=["id"]).column("id").to_pylist()
     _row = {b: i for i, b in enumerate(_bids)}
     _pt = pq.read_table(os.path.join(RAW, "building_part.parquet"), columns=["id", "building_id"])
@@ -357,10 +396,7 @@ if _spec_files:
             o["points"] = [wpt(lo, la) for lo, la in d["points"]]
         return o
 
-    for fn in _spec_files:
-        with open(fn, encoding="utf-8") as f:
-            spec = json.load(f)
-        name = os.path.splitext(os.path.basename(fn))[0]
+    for name, spec in DISTRICT_SPECS:
         out = dict(key=name, center=with_world(spec.get("center", {})), heroes=[], screens=[], signStreets=[], street=[])
         for fx in spec.get("fixes", []):
             for v in vols_for(fx.get("ids")):
@@ -391,7 +427,35 @@ if _spec_files:
                 continue
             out["heroes"].append(rec)
         for sc in spec.get("screens", []):
-            out["screens"].append(with_world(sc))
+            o = with_world(sc)
+            # snap onto the facade of its building that faces the given bearing (nearest to
+            # lon/lat when given): the panel then sits exactly on the wall
+            vs = vols_for([sc["building_id"]]) if sc.get("building_id") else []
+            if vs and "bearing" in sc:
+                br = math.radians(sc["bearing"])
+                want = np.array([math.sin(br), math.cos(br)])          # x east, n north
+                near = np.array([o["x"], -o["z"]]) if "x" in o else None
+                best = None
+                for v in vs:
+                    g = geoms[v]
+                    cc = np.array(g.exterior.coords)
+                    ccw = shapely.Polygon(cc).exterior.is_ccw
+                    for k in range(len(cc) - 1):
+                        e = cc[k + 1] - cc[k]
+                        Le = float(np.hypot(*e))
+                        if Le < 2:
+                            continue
+                        nrm = np.array([e[1], -e[0]]) / Le * (1 if ccw else -1)
+                        mid = (cc[k] + cc[k + 1]) / 2
+                        sc_ = float(nrm @ want) * 3 + min(Le, 40) / 40 - (np.hypot(*(mid - near)) / 30 if near is not None else 0)
+                        if best is None or sc_ > best[0]:
+                            best = (sc_, mid, Le, float(H[v]), nrm)
+                if best:
+                    _, mid, Le, hb, nrm = best
+                    o["x"], o["z"] = round(float(mid[0]), 2), round(float(-mid[1]), 2)
+                    o["wallBearing"] = round(math.degrees(math.atan2(nrm[0], nrm[1])) % 360, 1)
+                    o["wallLength"], o["buildingH"] = round(Le, 1), round(hb, 1)
+            out["screens"].append(o)
         for st in spec.get("sign_streets", []):
             out["signStreets"].append(with_world(st))
         for st in spec.get("street", []):
