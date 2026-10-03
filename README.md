@@ -46,11 +46,26 @@ integrated / mobile / software → low) and steps down by itself if the first se
 | street trees drawn | 100 % | 60 % | 35 % |
 | draw distance: small buildings / trees | 7.5 / 4.2 km | 5.2 / 2.8 km | 3.6 / 1.8 km |
 
+Loading is progressive: the loading screen only waits for the terrain and the building chunks
+around the starting view (`src/data/streamer.js`); the rest of the city, roads, trees and traffic
+stream in afterwards, nearest-in-view first, and a flight to a place fetches its area first.
+Without WebGL 2 the page explains how to enable it instead of hanging.
+
 The shadow map is only re-rendered when the view or the sun has moved enough to show; trees
 and roof units are instanced per 1.5 km tile (the outer sprawl per 9 km) so they are frustum- and
 distance-culled. Headless helpers (SwiftShader): `tools/profile.mjs` (render calls, draws,
 triangles per frame), `tools/frametime.mjs` (frame time, optionally with parts switched off) and
 `tools/nanscan.mjs` (non-finite pixels after each post pass).
+
+## Refined districts
+
+Shibuya, Akihabara and Tokyo Station get hand-styled hero buildings and street dressing.
+`tools/districts/<name>.json` lists the real buildings to replace (Overture ids: their generic
+volumes are dropped and the footprint is exported to the manifest), height fixes, LED screens
+(snapped onto the facade they face), sign streets and elevation profiles for viaducts;
+`src/world/districts/<name>.js` builds them with the kit in `src/world/districts/kit.js`
+(footprint extrusions and solids whose facade patterns — curtain wall, fins, ribbon windows,
+brick with stone bands, LED screens, sign mosaics — are evaluated in metres on the surface).
 
 ## Rebuild the data
 
