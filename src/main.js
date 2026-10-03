@@ -55,11 +55,12 @@ export class App {
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 2, 220000);
-    // start view: over the bay by the Rainbow Bridge, Tokyo Tower and the Minato skyline ahead
-    this.camera.position.set(900, 520, 5300);
+    // start view: Tokyo Tower and Shiba Park ahead, the Shinjuku skyline behind (the loader
+    // only waits for the buildings around here; the rest of the city streams in afterwards)
+    this.camera.position.set(-480, 300, 3900);
 
     this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.target.set(-1319, 120, 2376);
+    this.controls.target.set(-1319, 150, 2376);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI * 0.495;
