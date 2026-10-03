@@ -131,6 +131,26 @@ export class UI {
     this._toastT = setTimeout(() => t.classList.remove('on'), 4200);
   }
 
+  /** Chip at the top while the rest of the city streams in after the loading screen. */
+  streamProgress() {
+    const app = this.app;
+    const chip = $('streamchip');
+    const st = app.streamer;
+    if (!chip || !st) return;
+    if (app.fullyLoaded) {
+      $('streamtext').textContent = '全城加载完成';
+      $('streambar').style.width = '100%';
+      clearTimeout(this._chipT);
+      this._chipT = setTimeout(() => chip.classList.remove('on'), 1800);
+      return;
+    }
+    const parts = [...(app.pendingParts || [])];
+    $('streamtext').textContent = `后台加载 · 城区 ${st.done}/${st.total}${parts.length ? ' · ' + parts.join(' ') : ''}`;
+    const total = st.total + 3, got = st.done + 3 - parts.length;
+    $('streambar').style.width = `${Math.round(got / total * 100)}%`;
+    chip.classList.add('on');
+  }
+
   syncQuality(v) {
     $('segQuality').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
   }

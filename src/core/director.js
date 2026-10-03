@@ -75,6 +75,8 @@ export class Director {
   flyTo(place, opts = {}) {
     this.controls.autoRotate = false;
     const dest = this.resolve(place);
+    // buildings still streaming in: fetch the destination's first
+    this.app.streamer?.setFocus(dest.target.x, dest.target.z);
     const p0 = this.camera.position.clone();
     const t0 = this.controls.target.clone();
     const travel = p0.distanceTo(dest.pos);

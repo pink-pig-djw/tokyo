@@ -75,6 +75,7 @@ export function buildRoads(buf, opts) {
 
   let vi = 0;
   const X = new Float64Array(70000), Y = new Float64Array(70000), Z = new Float64Array(70000);
+  const NP = new Uint8Array(70000);
   for (let i = 0; i < nl; i++) {
     const n = counts[i];
     const code = codes[i];
@@ -82,7 +83,9 @@ export function buildRoads(buf, opts) {
       const off = vbase + (vi + k) * 6;
       X[k] = dv.getInt16(off, true) / 2;
       Z[k] = dv.getInt16(off + 2, true) / 2;
-      Y[k] = dv.getUint16(off + 4, true) / 20;
+      const yv = dv.getUint16(off + 4, true);
+      Y[k] = (yv & 0x7fff) / 20;
+      NP[k] = yv >> 15;              // no pillar here (it would stand inside a building)
     }
     vi += n;
     if (n < 2) continue;
@@ -136,7 +139,7 @@ export function buildRoads(buf, opts) {
         g.v(X[k] - nx * w, bot, Z[k] - nz * w, u, 2, code, 1);
         g.v(X[k] + nx * w, bot, Z[k] + nz * w, u, -3, code, 2);
         g.v(X[k] - nx * w, bot, Z[k] - nz * w, u, 3, code, 2);
-        if (Y[k] > 5 && Y[k] < 40 && u - lastPillar > 34 && !inRainbow(X[k], Z[k])) {
+        if (Y[k] > 5 && Y[k] < 40 && u - lastPillar > 34 && !NP[k] && !inRainbow(X[k], Z[k])) {
           lastPillar = u;
           pillars.push(X[k], Z[k], Y[k] - (rail ? 1.4 : 1.8), Math.atan2(tz, tx), Math.min(half * 1.1, 6));
         }

@@ -12,6 +12,7 @@ public/data/
 All coordinates are three.js world metres: x = east, z = south, origin LON0/LAT0.
 """
 import collections
+import glob
 import gzip
 import json
 import math
@@ -275,6 +276,130 @@ CY = B["cy"]
 NB = len(geoms)
 log("buildings", NB)
 
+# ---------------------------------------------------------------- clearance under viaducts
+# Buildings whose inferred height pokes up through an elevated deck above them are lowered
+# below the girders (what really stands under Tokyo's viaducts is low: shops "under the
+# girders", station concourses). Buildings with a mapped height are left alone.
+DECK_HALF = {1: 4.75, 2: 7.5, 3: 6.5, 4: 5.0, 5: 3.75, 6: 2.3, 7: 1.6, 8: 2.25, 9: 2.1,
+             20: 1.5, 21: 1.5, 22: 1.8, 23: 1.3}   # src/data/roadBuilder.js ROAD_WIDTH / 2
+_dsegs, _dbot = [], []
+for L in lines:
+    if L["hidden"] or L["elev"].max() <= 3:
+        continue
+    c, e = L["coords"], L["elev"]
+    half = DECK_HALF.get(L["code"], 2.0)
+    girder = 1.4 if L["code"] >= 20 else 1.8
+    for k in range(len(c) - 1):
+        lo = min(e[k], e[k + 1])
+        if lo > 3 and (c[k] != c[k + 1]).any():
+            _dsegs.append(shapely.buffer(shapely.LineString([c[k], c[k + 1]]), half, cap_style="flat"))
+            _dbot.append(lo - girder)
+lowered = kept_known = 0
+if _dsegs:
+    _dsegs = np.array(_dsegs, dtype=object)
+    _dbot = np.array(_dbot)
+    di, bi = STRtree(geoms).query(_dsegs, predicate="intersects")
+    ov = shapely.area(shapely.intersection(_dsegs[di], geoms[bi]))
+    under = {}
+    for d, b, a in zip(di, bi, ov):
+        bot = _dbot[d]
+        if a < 4 or H[b] <= bot - 0.3 or MINH[b] >= bot + 3:
+            continue
+        u = under.setdefault(int(b), [0.0, bot])
+        u[0] += a
+        u[1] = min(u[1], bot)
+    for b, (a, bot) in under.items():
+        if B["known"][b]:
+            kept_known += 1
+        elif a > 0.25 * AREA[b] or a > 60:
+            H[b] = max(2.5, min(H[b], bot - 0.5))
+            lowered += 1
+log("viaduct clearance: lowered", lowered, "inferred buildings; mapped-height overlaps kept", kept_known)
+
+# ---------------------------------------------------------------- refined districts
+# tools/districts/<name>.json: real buildings replaced by hand-styled models in
+# src/world/districts/<name>.js (their volumes are dropped here and the merged footprint is
+# exported), height corrections, LED screens, sign streets and street features.
+drop = np.zeros(NB, bool)
+districts = []
+_spec_files = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "districts", "*.json")))
+if _spec_files:
+    _bids = pq.read_table(os.path.join(RAW, "building.parquet"), columns=["id"]).column("id").to_pylist()
+    _row = {b: i for i, b in enumerate(_bids)}
+    _pt = pq.read_table(os.path.join(RAW, "building_part.parquet"), columns=["id", "building_id"])
+    _part_bid = dict(zip(_pt.column("id").to_pylist(), _pt.column("building_id").to_pylist()))
+    _vols = collections.defaultdict(list)
+    for _v, _p in enumerate(B["parent"]):
+        _vols[_p].append(_v)
+
+    def vols_for(ids):
+        out = []
+        for i in ids or []:
+            r = _row.get(i)
+            if r is None and i in _part_bid:
+                r = _row.get(_part_bid[i])
+            if r is not None:
+                out += _vols.get(r, [])
+        return sorted(set(out))
+
+    def wpt(lon, lat):
+        x, n = lonlat_to_xn(lon, lat)
+        return [round(float(x), 2), round(float(-n), 2)]
+
+    def with_world(d):
+        """copy of a spec entry with lon/lat (and polylines) converted to world x, z"""
+        o = {k: v for k, v in d.items() if k not in ("ids", "lon", "lat", "polyline", "points")}
+        if "lon" in d and "lat" in d:
+            o["x"], o["z"] = wpt(d["lon"], d["lat"])
+        if "polyline" in d:
+            o["points"] = [wpt(lo, la) for lo, la in d["polyline"]]
+        if "points" in d:
+            o["points"] = [wpt(lo, la) for lo, la in d["points"]]
+        return o
+
+    for fn in _spec_files:
+        with open(fn, encoding="utf-8") as f:
+            spec = json.load(f)
+        name = os.path.splitext(os.path.basename(fn))[0]
+        out = dict(key=name, center=with_world(spec.get("center", {})), heroes=[], screens=[], signStreets=[], street=[])
+        for fx in spec.get("fixes", []):
+            for v in vols_for(fx.get("ids")):
+                H[v] = float(fx["h"])
+                B["known"][v] = True
+        missing = []
+        for hd in spec.get("heroes", []):
+            vs = vols_for(hd.get("ids"))
+            rec = with_world(hd)
+            rec["rings"] = []
+            if vs:
+                fp = shapely.make_valid(shapely.union_all(geoms[vs]))
+                fp = shapely.simplify(fp, 0.25)
+                for part in shapely.get_parts(fp):
+                    if shapely.get_type_id(part) != 3 or part.area < 6:
+                        continue
+                    xy = np.array(part.exterior.coords)[:-1]
+                    rec["rings"].append([[round(float(x), 2), round(float(-y), 2)] for x, y in xy])
+                c = fp.centroid
+                rec.setdefault("x", round(float(c.x), 2))
+                rec.setdefault("z", round(float(-c.y), 2))
+                rec["dataH"] = round(float(H[vs].max()), 1)
+                rec["dataMinH"] = round(float(MINH[vs].min()), 1)
+                rec.setdefault("h", rec["dataH"])
+                drop[vs] = True
+            elif "x" not in rec:
+                missing.append(hd.get("key"))
+                continue
+            out["heroes"].append(rec)
+        for sc in spec.get("screens", []):
+            out["screens"].append(with_world(sc))
+        for st in spec.get("sign_streets", []):
+            out["signStreets"].append(with_world(st))
+        for st in spec.get("street", []):
+            out["street"].append(with_world(st))
+        districts.append(out)
+        log("district", name, "heroes", len(out["heroes"]), "dropped volumes", int(drop.sum()),
+            "screens", len(out["screens"]), "sign streets", len(out["signStreets"]), "missing", missing)
+
 WALL_PALETTE = [
     "#e9e6df", "#f1ede4", "#dcd8cf", "#d6cfc2", "#cfc6b4", "#c9c3b8", "#bdb8b0", "#a9a59e", "#8f8b85",
     "#c8b49a", "#b59c80", "#9a7a62", "#7c5e4a", "#a65a42", "#8c4a3a", "#e3dccb", "#c7cdd2", "#9ea6ad",
@@ -463,7 +588,6 @@ log("styles", np.bincount(style))
 
 # hand-modelled replacements: drop the extruded footprint, remember its pose for the model
 pagoda = None
-drop = np.zeros(NB, bool)
 for i in range(NB):
     if B["name"][i] == "五重塔" and abs(CX[i] - 3262) < 80 and abs(CY[i] - 3784) < 80:
         ang, _ = (lambda g: (lambda r: (math.atan2(*(np.array(r.exterior.coords)[1] - np.array(r.exterior.coords)[0])[::-1]), r))(shapely.minimum_rotated_rectangle(g)))(geoms[i])
@@ -545,7 +669,7 @@ def rect_angle(g):
     return math.atan2(e[1], e[0]), c[:4]
 
 
-cand = np.where(((H > 12) & (AREA > 90) & (style != 0) & (style != 5)) | (H >= 60))[0]
+cand = np.where((((H > 12) & (AREA > 90) & (style != 0) & (style != 5)) | (H >= 60)) & ~drop)[0]
 log("roof/aviation candidates", len(cand))
 for b in cand:
     g = geoms[b]
@@ -621,7 +745,7 @@ for b in cand:
 log("roof units", len(roof_units), "aviation lights", len(aviation))
 
 # neon signs on street-facing walls in nightlife zones
-zone_bld = np.where((zone_s > 0.02) & (H >= 7) & (H < 120) & (style != 5) & (style != 4))[0]
+zone_bld = np.where((zone_s > 0.02) & (H >= 7) & (H < 120) & (style != 5) & (style != 4) & ~drop)[0]
 log("sign candidate buildings", len(zone_bld))
 mids, outs, meta = [], [], []
 for b in zone_bld:
@@ -702,7 +826,7 @@ for lo, la, count, sc in SCREENS:
     px, pn = xn(lo, la)
     cands = []
     for b in bld_tree.query(shapely.Point(px, pn).buffer(110)):
-        if H[b] < 15:
+        if H[b] < 15 or drop[b]:      # hand-modelled heroes carry their own screens
             continue
         g = geoms[b]
         c = np.array(g.exterior.coords)
@@ -1001,7 +1125,27 @@ def sect(arr_bytes, n):
         ebuf += b"\0"
 
 
+# ---------------------------------------------------------------- trees vs buildings
+# no trunks inside buildings, and crowns no wider than the gap to the nearest wall that is
+# taller than the crown bottom (street trees next to buildings are pruned in reality too).
+# The front end draws h = 3 + 16 s (conifers x1.1), crown radius <= 0.42 h (0.30 h conifer)
+# times a per-tree width factor <= 1.18.
 T = np.array(trees)
+_h_old = 6 + 13 * T[:, 3] * np.where(T[:, 2] == 1, 1.1, 1.0)
+_k = np.where(T[:, 2] == 1, 0.30, 0.42) * 1.18
+_pts = shapely.points(T[:, 0], -T[:, 1])
+ti, bi = bld_tree.query(_pts, predicate="dwithin", distance=float((_k * _h_old).max()))
+_d = shapely.distance(_pts[ti], geoms[bi])
+_rel = H[bi] > 0.3 * _h_old[ti]
+gap = np.full(len(T), np.inf)
+np.minimum.at(gap, ti[_rel], _d[_rel])
+h_new = np.minimum(_h_old, (gap + 0.4) / _k)
+keep = (gap > 0) & (h_new >= 4.0)
+log("trees vs buildings: dropped", int((~keep).sum()), "(inside or squeezed),",
+    int(((h_new < _h_old - 0.1) & keep).sum()), "crowns reduced")
+T = T[keep]
+T[:, 3] = np.clip((h_new[keep] - 3) / (16 * np.where(T[:, 2] == 1, 1.1, 1.0)), 0, 1)
+trees = [tuple(r) for r in T]
 tree_dt = np.dtype([("x", "<i2"), ("z", "<i2"), ("t", "u1"), ("s", "u1")])
 ta = np.zeros(len(T), tree_dt)
 ta["x"] = np.round(T[:, 0] * 2)
@@ -1067,7 +1211,17 @@ E = np.concatenate([L["elev"] for L in vis])
 vd = np.zeros(len(V), np.dtype([("x", "<i2"), ("z", "<i2"), ("y", "<u2")]))
 vd["x"] = np.round(V[:, 0] * 2)
 vd["z"] = np.round(-V[:, 1] * 2)
-vd["y"] = np.round(E * 20).clip(0, 65535)
+Yq = np.round(E * 20).clip(0, 32767).astype(np.uint16)
+# no viaduct pillar where it would stand inside a building: bit 15 of the elevation
+cand = np.where((E > 5) & (E < 40))[0]
+nop = np.zeros(0, int)
+if len(cand):
+    pi, bi = bld_tree.query(shapely.points(V[cand, 0], V[cand, 1]), predicate="dwithin", distance=1.5)
+    hit = (H[bi] > 2.0) & (MINH[bi] < E[cand][pi] - 2)
+    nop = np.unique(cand[pi[hit]])
+    Yq[nop] |= 0x8000
+vd["y"] = Yq
+log("pillars suppressed inside buildings at", len(nop), "deck vertices")
 rbuf += vd.tobytes()
 log("roads.bin.gz", write_gz("roads.bin.gz", rbuf) / 1e6, "MB", len(vis), "lines")
 
@@ -1244,6 +1398,7 @@ manifest = dict(
     rainbow=dict(x=float(rb_c[0]), z=float(-rb_c[1]), ax=float(axis[0]), az=float(-axis[1]),
                  length=float(rb_len), width=float(rb_wid), deck=RB_DECK),
     pagoda=pagoda,
+    districts=districts,
     wards=wards,
     stations=stations,
     stats=dict(buildings=int(NB), knownHeights=int(B["known"].sum()), trees=len(trees), signs=len(signs),

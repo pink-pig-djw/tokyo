@@ -12,6 +12,7 @@ import { createTraffic } from './world/traffic.js';
 import { Weather } from './world/weather.js';
 import { createRoads } from './world/roads.js';
 import { createLandmarks, makeLL } from './world/landmarks.js';
+import { createDistricts } from './world/districts/index.js';
 import { Director } from './core/director.js';
 import { Tour } from './core/tour.js';
 import { UI } from './ui/ui.js';
@@ -20,6 +21,7 @@ import {
   createTrees, createLamps, createAviation, createRoofUnits, createSigns, createSprawl, setTileDensity,
 } from './world/extras.js';
 import { WorkerPool } from './data/workerPool.js';
+import { ChunkStreamer } from './data/streamer.js';
 
 const params = new URLSearchParams(location.search);
 const LEVELS = ['low', 'medium', 'high'];
@@ -53,10 +55,11 @@ export class App {
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 2, 220000);
-    this.camera.position.set(2600, 1500, 11000);
+    // start view: over the bay by the Rainbow Bridge, Tokyo Tower and the Minato skyline ahead
+    this.camera.position.set(900, 520, 5300);
 
     this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.target.set(-600, 0, 0);
+    this.controls.target.set(-1319, 120, 2376);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI * 0.495;
@@ -120,6 +123,20 @@ export class App {
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
+
+    // the GPU driver can reset the context (sleep, driver update, too many tabs); three.js
+    // re-creates its resources on restore, our own render targets need a refresh
+    canvas.addEventListener('webglcontextlost', () => {
+      this.contextLost = true;
+      document.body.classList.add('ctxlost');
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+      document.body.classList.remove('ctxlost');
+      this.lastEnvKey = '';
+      this.updateEnvMap(true);
+      this.shadowState.force = true;
+    });
   }
 
   resize() {
@@ -132,7 +149,8 @@ export class App {
     this.reflection?.setSize(w * pr, h * pr);
   }
 
-  async load(onProgress) {
+  /** Manifest, terrain, far field and landmarks: everything the first frame needs but buildings. */
+  async loadBase(onProgress) {
     const manifest = await fetchJSON('manifest.json');
     this.manifest = manifest;
     this.ll = makeLL(manifest);
@@ -147,18 +165,61 @@ export class App {
     this.reflection.exclude([this.sprawl.group]);
     this.landmarks = createLandmarks(manifest);
     this.scene.add(this.landmarks.group);
-    onProgress?.(0.06, '地形');
+    // hand-styled heroes of the refined districts (their generic volumes are not in the chunks)
+    this.districts = createDistricts(manifest);
+    this.scene.add(this.districts.group);
+    this.buildingMat = buildingMaterial(manifest);
+    this.streamer = new ChunkStreamer(manifest.chunks, (c) => this.addChunk(c));
+    onProgress?.(0.15, '地形');
+  }
 
-    // roads (built in a worker) and city details load alongside the buildings
+  async addChunk(c) {
+    const buf = await fetchBinary(c.file);
+    const res = await this.pool.run('chunk', buf);
+    const meshes = createChunkMeshes(res, this.buildingMat);
+    for (const m of meshes) {
+      this.scene.add(m);
+      if (m.userData.small) {
+        this.reflection.exclude([m]);
+        this.lod.add(m, 'small', m.userData.center, m.userData.radius);
+      }
+    }
+    this.buildingMeshes.push(...meshes);
+    this.shadowState.dirty = true;
+  }
+
+  /** The buildings around the starting view; the loading screen can go after this. */
+  async loadStart(onProgress) {
+    const set = this.streamer.startSet(this.camera, this.controls.target);
+    let n = 0;
+    await this.streamer.loadSet(set, () => onProgress?.(0.15 + 0.85 * (++n / set.length), '建筑'));
+    this.ready = true;
+    this.shadowState.force = true;
+  }
+
+  /** Roads, trees and signs, traffic and the rest of the city, while the city is already shown. */
+  loadRest() {
+    // shaders for late arrivals are compiled before they join the scene, so they don't stall a frame
+    const addCompiled = (...objs) => Promise.all(objs.map(async (o) => {
+      try { await this.renderer.compileAsync(o, this.camera, this.scene); } catch (e) { /* compiles on first use */ }
+      this.scene.add(o);
+    }));
+    const pending = this.pendingParts = new Set(['道路', '树木与招牌', '车流']);
+    const done = (name) => () => { pending.delete(name); this.ui?.streamProgress(); };
     const roadsP = fetchBinary('roads.bin.gz')
-      .then((buf) => this.pool.run('roads', buf, { rainbow: manifest.rainbow }))
-      .then((res) => { this.roads = createRoads(res); this.scene.add(this.roads); this.reflection.exclude([this.roads]); });
+      .then((buf) => this.pool.run('roads', buf, { rainbow: this.manifest.rainbow }))
+      .then((res) => {
+        this.roads = createRoads(res);
+        this.reflection.exclude([this.roads]);
+        return addCompiled(this.roads);
+      })
+      .then(done('道路'));
     const trafficP = fetchBinary('routes.bin.gz').then((buf) => {
       this.traffic = createTraffic(parseRoutes(buf), this.quality);
       this.traffic.userData.setLod(this.quality.lod);
-      this.scene.add(this.traffic);
       this.reflection.exclude([this.traffic]);
-    });
+      return addCompiled(this.traffic);
+    }).then(done('车流'));
     const extrasP = fetchBinary('extras.bin.gz').then((buf) => {
       const ex = parseExtras(buf);
       this.trees = createTrees(ex.trees, this.ll);
@@ -169,34 +230,17 @@ export class App {
       this.lamps = createLamps(ex.lamps);
       this.aviation = createAviation(ex.aviation);
       this.signs = createSigns(ex.signs);
-      this.scene.add(this.trees.group, this.roofUnits.group, this.lamps, this.aviation, this.signs);
       this.reflection.exclude([this.trees.group, this.roofUnits.group]);
+      return addCompiled(this.trees.group, this.roofUnits.group, this.lamps, this.aviation, this.signs);
+    }).then(() => { this.shadowState.dirty = true; }).then(done('树木与招牌'));
+    this.streamer.onProgress(() => this.ui?.streamProgress());
+    const chunksP = this.streamer.streamRest();
+    this.restLoaded = Promise.all([roadsP, trafficP, extrasP, chunksP]).then(() => {
+      this.fullyLoaded = true;
+      this.shadowState.dirty = true;
+      this.ui?.streamProgress();
     });
-
-    const mat = buildingMaterial(manifest);
-    // nearest chunks first
-    const t = this.controls.target;
-    const chunks = [...manifest.chunks].sort((a, b) =>
-      Math.hypot(a.cx - t.x, a.cz - t.z) - Math.hypot(b.cx - t.x, b.cz - t.z));
-    let done = 0;
-    await Promise.all(chunks.map(async (c) => {
-      const buf = await fetchBinary(c.file);
-      const res = await this.pool.run('chunk', buf);
-      const meshes = createChunkMeshes(res, mat);
-      for (const m of meshes) {
-        this.scene.add(m);
-        if (m.userData.small) {
-          this.reflection.exclude([m]);
-          this.lod.add(m, 'small', m.userData.center, m.userData.radius);
-        }
-      }
-      this.buildingMeshes.push(...meshes);
-      done++;
-      onProgress?.(0.08 + 0.9 * done / chunks.length, '建筑');
-    }));
-    await Promise.all([roadsP, extrasP, trafficP]);
-    this.ready = true;
-    this.shadowState.force = true;
+    return this.restLoaded;
   }
 
   /** Compile every material before the loader goes away, so the first frames don't stall. */
@@ -348,7 +392,7 @@ export class App {
   frame() {
     this.timer.update();
     const dt = Math.min(this.timer.getDelta(), 0.1);
-    if (!this.revealed) return;
+    if (!this.revealed || this.contextLost) return;
     this.tour?.update(dt);
     const before = this._lastCam || (this._lastCam = new THREE.Vector3());
     const driven = this.director ? this.director.update(dt) : false;
@@ -395,38 +439,105 @@ export class App {
   }
 }
 
-const app = new App(document.getElementById('c'));
-window.__tokyo = app;
-app.U = U;
-app.director = new Director(app);
-if (params.has('cam')) {
-  const v = params.get('cam').split(',').map(Number);
-  app.camera.position.set(v[0], v[1], v[2]);
-  app.controls.target.set(v[3], v[4], v[5]);
-}
-const bar = document.getElementById('progress');
-app.start();
-app.load((p, label) => {
-  if (bar) bar.style.width = `${Math.round(p * 100)}%`;
-  const l = document.getElementById('loadlabel');
-  if (l) l.textContent = `${label} · ${Math.round(p * 100)}%`;
-}).then(async () => {
-  app.ui = new UI(app);
-  app.tour = new Tour(app, app.director, PLACES, app.ui);
-  app.ui.init();
-  if (params.has('place')) {
-    const p = PLACES.find((q) => q.id === params.get('place'));
-    if (p) { const r = app.director.resolve(p); app.camera.position.copy(r.pos); app.controls.target.copy(r.target); app.camera.lookAt(r.target); }
+/** WebGL 2 present and usable? (checked before anything else touches the GPU) */
+function webgl2Available() {
+  try {
+    if (!window.WebGL2RenderingContext) return false;
+    const gl = document.createElement('canvas').getContext('webgl2');
+    if (!gl) return false;
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return true;
+  } catch (e) {
+    return false;
   }
-  const l = document.getElementById('loadlabel');
-  if (l) l.textContent = '正在准备着色器…';
-  await app.warmUp();
-  document.body.classList.add('ready');
-  if (l) l.textContent = '城市已就绪';
-  if (params.has('shot')) { document.body.classList.add('shot'); app.ui.dismissLoader(); }
-  window.__tokyoReady = true;
-}).catch((e) => {
-  console.error(e);
-  const l = document.getElementById('loadlabel');
-  if (l) l.textContent = '加载失败：' + e.message;
-});
+}
+
+const FATAL = {
+  webgl: {
+    title: '无法启动 3D 画面',
+    text: '这个页面需要浏览器支持 WebGL 2（网页 3D 图形），但你的浏览器现在没有启用它。常见原因和解决办法：',
+    items: [
+      '浏览器关闭了硬件加速：Chrome / Edge 在「设置 → 系统」里打开「使用图形加速（如果可用）」，然后重启浏览器。',
+      '显卡驱动太旧，或被浏览器屏蔽：更新显卡驱动后再试。',
+      '浏览器版本太旧：请使用最新版 Chrome、Edge、Firefox，或 Safari 15 以上。',
+      '远程桌面、虚拟机或部分公司电脑会禁用 3D 图形，换一台设备试试。',
+    ],
+    note: '想确认原因，可以在 Chrome / Edge 地址栏输入 chrome://gpu，查看 WebGL2 一项的状态。',
+  },
+  load: {
+    title: '城市数据加载失败',
+    text: '网络中断，或服务器暂时不可用。检查网络后点「重试」。',
+  },
+  crash: {
+    title: '启动时出错',
+    text: '页面初始化失败。可以点「重试」；如果一直失败，换用最新版 Chrome 或 Edge 试试。',
+  },
+};
+
+function fatal(kind, err) {
+  const f = FATAL[kind];
+  if (err) console.error(err);
+  document.body.classList.add('fatal');
+  const box = document.getElementById('fatal');
+  if (!box) return;
+  box.querySelector('h2').textContent = f.title;
+  box.querySelector('.ftext').textContent = f.text + (err && kind !== 'webgl' ? `（${err.message || err}）` : '');
+  const ul = box.querySelector('ul');
+  ul.replaceChildren(...(f.items || []).map((t) => Object.assign(document.createElement('li'), { textContent: t })));
+  box.querySelector('.fnote').textContent = f.note || '';
+  box.hidden = false;
+  box.querySelector('button').onclick = () => location.reload();
+}
+
+let app = null;
+if (!webgl2Available()) {
+  fatal('webgl');
+} else {
+  try {
+    app = new App(document.getElementById('c'));
+  } catch (e) {
+    fatal(/webgl|context/i.test(String(e && e.message)) ? 'webgl' : 'crash', e);
+  }
+}
+
+if (app) {
+  window.__tokyo = app;
+  app.U = U;
+  app.director = new Director(app);
+  if (params.has('cam')) {
+    const v = params.get('cam').split(',').map(Number);
+    app.camera.position.set(v[0], v[1], v[2]);
+    app.controls.target.set(v[3], v[4], v[5]);
+  }
+  const bar = document.getElementById('progress');
+  const label = document.getElementById('loadlabel');
+  const progress = (p, text) => {
+    if (bar) bar.style.width = `${Math.round(p * 100)}%`;
+    if (label) label.textContent = `${text} · ${Math.round(p * 100)}%`;
+  };
+  app.start();
+  (async () => {
+    await app.loadBase(progress);
+    if (params.has('place')) {
+      const p = PLACES.find((q) => q.id === params.get('place'));
+      if (p) { const r = app.director.resolve(p); app.camera.position.copy(r.pos); app.controls.target.copy(r.target); app.camera.lookAt(r.target); }
+    }
+    app.camera.updateMatrixWorld();
+    await app.loadStart(progress);
+    app.ui = new UI(app);
+    app.tour = new Tour(app, app.director, PLACES, app.ui);
+    app.ui.init();
+    const rest = app.loadRest();
+    if (label) label.textContent = '正在准备着色器…';
+    await app.warmUp();
+    if (params.has('shot')) {
+      // headless captures need the whole city
+      if (label) label.textContent = '正在加载其余城区…';
+      await rest;
+    }
+    document.body.classList.add('ready');
+    if (label) label.textContent = app.fullyLoaded ? '城市已就绪' : '城市已就绪 · 其余城区会在后台继续加载';
+    if (params.has('shot')) { document.body.classList.add('shot'); app.ui.dismissLoader(); }
+    window.__tokyoReady = true;
+  })().catch((e) => fatal(/fetch|HTTP|network|Failed/i.test(String(e && e.message)) ? 'load' : 'crash', e));
+}

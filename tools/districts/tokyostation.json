@@ -1,0 +1,7 @@
+{
+  "district": "tokyostation",
+  "center": { "lon": 139.7656, "lat": 35.6812 },
+  "heroes": [
+    { "key": "marunouchi-station", "name": "東京駅丸の内駅舎", "ids": ["66b8f478-5030-449a-8f4d-227c4492fd29"], "style": "station" }
+  ]
+}

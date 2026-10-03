@@ -131,10 +131,14 @@ function tokyoTower() {
     parts.push(beam(new THREE.Vector3(0, y, 0), new THREE.Vector3(0, Math.min(H, y + 6), 0), 1.4 - (y - 296) * 0.025,
       Math.floor(y / 6) % 2 ? ORANGE : WHITE, 0.8));
   }
-  // Foot Town podium sits between the legs
-  const ft = new THREE.BoxGeometry(70, 22, 50);
-  ft.translate(0, 11, 0);
-  parts.push(paint(ft, '#d9d4cb', 0.0));
+  // Foot Town podium between the legs, stepped so it stays inside the leg chords (the legs
+  // close in with height: halfW(9) ~ 35 m, halfW(22) ~ 29 m)
+  for (const [y0, y1, inset] of [[0, 9, 3.4], [9, 22, 2.8]]) {
+    const half = halfW(y1) - inset;
+    const ft = new THREE.BoxGeometry(half * 2, y1 - y0, half * 2);
+    ft.translate(0, (y0 + y1) / 2, 0);
+    parts.push(paint(ft, '#d9d4cb', 0.0));
+  }
   const geo = clean(parts);
   geo.computeVertexNormals();
   return geo;
@@ -454,8 +458,10 @@ export function createLandmarks(manifest) {
   }));
   tt.castShadow = true;
   tt.receiveShadow = true;
-  tt.position.copy(ll(139.74543, 35.65859));
-  tt.rotation.y = THREE.MathUtils.degToRad(-8);
+  // centred on and turned to the four leg footings mapped in OSM (6.8 m pads ~58 m from the
+  // centre at bearings 11/101/191/281 deg): the corners sit at rotation - 45 deg
+  tt.position.copy(ll(139.74543, 35.65859)).add(new THREE.Vector3(2.2, 0, -0.25));
+  tt.rotation.y = THREE.MathUtils.degToRad(-33.8);
   group.add(tt);
 
   const st = skytree();

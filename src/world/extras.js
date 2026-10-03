@@ -147,7 +147,7 @@ export function createTrees(sec, ll) {
     idx.forEach((i, k) => {
       const x = X(i), z = Z(i), t = T(i);
       const sc = sec.dv.getUint8(i * 6 + 5) / 255;
-      const h = 6 + sc * 13 * (t === 1 ? 1.1 : 1);
+      const h = 3 + sc * 16 * (t === 1 ? 1.1 : 1);   // pipeline shrinks trees next to walls
       q.setFromAxisAngle(up, (i * 2.399) % (Math.PI * 2));
       const wide = 0.85 + ((i * 7919) % 100) / 300;
       m4.compose(p.set(x, 0, z), q, s.set(h * wide, h, h * wide));
@@ -252,6 +252,23 @@ function pointCloud(sec, kind, yScale = 10) {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  g.computeBoundingSphere();
+  const pts = new THREE.Points(g, pointsMaterial(kind));
+  pts.renderOrder = 5;
+  return pts;
+}
+
+/** Point lights from plain positions (x, y, z triples), e.g. aviation lights on hand-built towers. */
+export function createPointLights(positions, kind = 'aviation') {
+  const n = positions.length / 3;
+  const seed = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const gx = Math.round(positions[i * 3] / 40), gz = Math.round(positions[i * 3 + 2] / 40);
+    seed[i] = Math.abs(Math.sin(gx * 12.9898 + gz * 78.233) * 43758.5453) % 1;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   g.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
   g.computeBoundingSphere();
   const pts = new THREE.Points(g, pointsMaterial(kind));
