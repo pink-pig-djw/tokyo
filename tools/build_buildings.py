@@ -74,17 +74,58 @@ for i in range(len(b_id)):
     base = dict(cls=b_cls[i], sub=b_sub[i], name=b_name[i], parent=i)
     plist = parts_by_building.get(b_id[i]) if b_parts[i] else None
     if plist:
+        prs = []
         for j in plist:
-            h = p_h[j]
+            h, hfl = p_h[j], False
             if np.isnan(h) and not np.isnan(p_fl[j]):
-                h = p_fl[j] * 3.4
+                h, hfl = p_fl[j] * 3.4, True
             if np.isnan(h):
                 h = b_h[i] if not np.isnan(b_h[i]) else np.nan
             mh = p_minh[j]
             if np.isnan(mh):
                 mh = p_minfl[j] * 3.4 if not np.isnan(p_minfl[j]) else 0.0
-            recs.append(dict(base, geom=p_geom[j], h=h, minh=mh, floors=p_fl[j],
-                             fc=p_fc[j] or b_fc[i], rc=p_rc[j] or b_rc[i], part=True))
+            prs.append(dict(base, geom=p_geom[j], h=h, minh=mh, floors=p_fl[j], hfl=hfl,
+                            fc=p_fc[j] or b_fc[i], rc=p_rc[j] or b_rc[i], part=True))
+        bh = b_h[i]
+        hs = [r["h"] for r in prs if not np.isnan(r["h"])]
+        tall = max(hs) if hs else np.nan
+        # floor counts x 3.4 m undershoot towers with tall storeys (Hikarie: 34F, 182.5 m):
+        # scale floor-derived parts up to the building's known height
+        if not np.isnan(bh) and hs and tall < 0.8 * bh and any(r["hfl"] for r in prs if r["h"] == tall):
+            k = bh / tall
+            for r in prs:
+                if r["hfl"]:
+                    r["h"] *= k
+                    r["minh"] *= k
+            tall = bh
+        # Parts replace the outline, but often only the towers are mapped: keep the rest of the
+        # outline as a podium (Marunouchi Building), fill under floating parts (Mark City), or
+        # restore the main body when the mapped parts are only low annexes.
+        try:
+            outline = shapely.make_valid(b_geom[i])
+            ground = [r["geom"] for r in prs if r["minh"] < 0.5]
+            floating = [r for r in prs if r["minh"] >= 0.5]
+            pu = shapely.make_valid(shapely.union_all([r["geom"] for r in prs]))
+            gu = shapely.make_valid(shapely.union_all(ground)) if ground else None
+            cov = pu.area / max(outline.area, 1.0)
+            unsupported = 0.0
+            if floating:
+                fu = shapely.make_valid(shapely.union_all([r["geom"] for r in floating]))
+                unsupported = (fu.difference(gu).area if gu is not None else fu.area) / max(fu.area, 1.0)
+            if cov < 0.6 or unsupported > 0.3:
+                pod = outline.difference(gu.buffer(0.05)) if gu is not None else outline
+                if pod.area >= 20:
+                    if floating and unsupported > 0.3:
+                        ph = min(r["minh"] for r in floating)
+                    elif not np.isnan(bh) and (np.isnan(tall) or tall < 0.7 * bh):
+                        ph = bh
+                    else:
+                        ph = np.nan
+                    recs.append(dict(base, geom=pod, h=ph, minh=0.0, floors=np.nan, fc=b_fc[i], rc=b_rc[i],
+                                     part=False, hcap=0.5 * tall if not np.isnan(tall) else 45.0))
+        except Exception:
+            pass
+        recs.extend(prs)
     else:
         mh = b_minh[i]
         if np.isnan(mh):
@@ -254,17 +295,28 @@ final_h = np.where(known, target, np.nan)
 unk = np.isnan(final_h)
 jit = np.array([hash01(i, 11) for i in range(N)])
 final_h[unk] = pred[unk] * np.exp((jit[unk] - 0.5) * 0.38)
+# restored podiums stay below the towers they carry
+hcap = np.array([r.get("hcap", np.inf) for r in recs])
+final_h[unk] = np.minimum(final_h[unk], np.maximum(hcap[unk], 6.0))
 final_h = np.clip(final_h, 3.0, 700.0)
 minh = np.array([r["minh"] if not np.isnan(r["minh"]) else 0.0 for r in recs])
+# roof-only structures (platform canopies, petrol-station roofs): a thin plate on posts,
+# not a solid block from the ground
+is_roof = np.array([r["cls"] == "roof" for r in recs]) & (minh < 0.5)
+final_h[is_roof & unk] = np.clip(final_h[is_roof & unk], 4.5, 9.0)
+minh[is_roof] = np.maximum(final_h[is_roof] - 1.2, 0.0)
+log("roof-only structures as plates", int(is_roof.sum()))
 minh = np.clip(minh, 0, final_h - 1.0)
 log("height percentiles (all)", np.percentile(final_h, [10, 50, 90, 99]).round(1))
 log("height percentiles (inferred)", np.percentile(final_h[unk], [10, 50, 90, 99]).round(1))
 
-with open(os.path.join(RAW, "buildings_proc.pkl"), "wb") as f:
+_tmp = os.path.join(RAW, "buildings_proc.pkl.tmp")
+with open(_tmp, "wb") as f:
     pickle.dump(dict(
         geoms=geoms, h=final_h, minh=minh, known=known, area=area, cx=cx, cy=cy,
         cls=[r["cls"] for r in recs], sub=[r["sub"] for r in recs], name=[r["name"] for r in recs],
         fc=[r["fc"] for r in recs], rc=[r["rc"] for r in recs], part=[r["part"] for r in recs],
         parent=[r["parent"] for r in recs],
     ), f)
+os.replace(_tmp, os.path.join(RAW, "buildings_proc.pkl"))   # atomic: readers never see half a file
 log("wrote buildings_proc.pkl")
