@@ -91,7 +91,11 @@ for i in range(len(b_id)):
         tall = max(hs) if hs else np.nan
         # floor counts x 3.4 m undershoot towers with tall storeys (Hikarie: 34F, 182.5 m):
         # scale floor-derived parts up to the building's known height
-        if not np.isnan(bh) and hs and tall < 0.8 * bh and any(r["hfl"] for r in prs if r["h"] == tall):
+        top = max(prs, key=lambda r: r["h"] if not np.isnan(r["h"]) else -1)
+        # ... but only when that part is the tower itself, not a low annex (Infos Tower: 2F part)
+        is_tower = (top["floors"] >= 0.8 * b_fl[i]) if not np.isnan(b_fl[i]) and not np.isnan(top["floors"]) \
+            else (hs and bh / max(tall, 1.0) < 2.2)
+        if not np.isnan(bh) and hs and tall < 0.8 * bh and top["hfl"] and is_tower:
             k = bh / tall
             for r in prs:
                 if r["hfl"]:
@@ -122,7 +126,7 @@ for i in range(len(b_id)):
                     else:
                         ph = np.nan
                     recs.append(dict(base, geom=pod, h=ph, minh=0.0, floors=np.nan, fc=b_fc[i], rc=b_rc[i],
-                                     part=False, hcap=0.5 * tall if not np.isnan(tall) else 45.0))
+                                     part=False, hcap=min(0.5 * tall, 45.0) if not np.isnan(tall) else 45.0))
         except Exception:
             pass
         recs.extend(prs)
