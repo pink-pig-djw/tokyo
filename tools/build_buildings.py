@@ -67,6 +67,7 @@ for i, bid in enumerate(p_bid):
 
 # ---------------------------------------------------------------- assemble records
 recs = []  # dict per polygon volume
+n_pod = [0, 0, 0, 0]  # restored podiums: under floating parts, building height, outline storeys, inferred
 idx_of = {bid: i for i, bid in enumerate(b_id)}
 for i in range(len(b_id)):
     if b_under[i]:
@@ -76,19 +77,26 @@ for i in range(len(b_id)):
     if plist:
         prs = []
         for j in plist:
-            h, hfl = p_h[j], False
+            h, hfl, inh = p_h[j], False, False
             if np.isnan(h) and not np.isnan(p_fl[j]):
                 h, hfl = p_fl[j] * 3.4, True
             if np.isnan(h):
-                h = b_h[i] if not np.isnan(b_h[i]) else np.nan
+                # untagged part: the building's height, else its storeys (Miyashita Park: 3F)
+                inh = True
+                if not np.isnan(b_h[i]):
+                    h = b_h[i]
+                elif not np.isnan(b_fl[i]):
+                    h, hfl = b_fl[i] * 3.4, True
             mh = p_minh[j]
             if np.isnan(mh):
                 mh = p_minfl[j] * 3.4 if not np.isnan(p_minfl[j]) else 0.0
-            prs.append(dict(base, geom=p_geom[j], h=h, minh=mh, floors=p_fl[j], hfl=hfl,
+            prs.append(dict(base, geom=p_geom[j], h=h, minh=mh, floors=p_fl[j], hfl=hfl, inh=inh,
                             fc=p_fc[j] or b_fc[i], rc=p_rc[j] or b_rc[i], part=True))
         bh = b_h[i]
         hs = [r["h"] for r in prs if not np.isnan(r["h"])]
         tall = max(hs) if hs else np.nan
+        own = [r["h"] for r in prs if not r["inh"] and not np.isnan(r["h"])]
+        tall_own = max(own) if own else np.nan     # parts with their own height or storeys
         # floor counts x 3.4 m undershoot towers with tall storeys (Hikarie: 34F, 182.5 m):
         # scale floor-derived parts up to the building's known height
         top = max(prs, key=lambda r: r["h"] if not np.isnan(r["h"]) else -1)
@@ -121,10 +129,13 @@ for i in range(len(b_id)):
                 if pod.area >= 20:
                     if floating and unsupported > 0.3:
                         ph = min(r["minh"] for r in floating)
-                    elif not np.isnan(bh) and (np.isnan(tall) or tall < 0.7 * bh):
+                    elif not np.isnan(bh) and (np.isnan(tall_own) or tall_own < 0.7 * bh):
                         ph = bh
+                    elif not np.isnan(b_fl[i]) and (np.isnan(tall_own) or b_fl[i] * 3.4 < 0.6 * tall_own):
+                        ph = b_fl[i] * 3.4      # the outline's storeys describe the low body
                     else:
                         ph = np.nan
+                    n_pod[0 if floating and unsupported > 0.3 else 1 if ph == bh else 2 if not np.isnan(ph) else 3] += 1
                     recs.append(dict(base, geom=pod, h=ph, minh=0.0, floors=np.nan, fc=b_fc[i], rc=b_rc[i],
                                      part=False, hcap=min(0.5 * tall, 45.0) if not np.isnan(tall) else 45.0))
         except Exception:
@@ -136,7 +147,7 @@ for i in range(len(b_id)):
             mh = b_minfl[i] * 3.4 if not np.isnan(b_minfl[i]) else 0.0
         recs.append(dict(base, geom=b_geom[i], h=b_h[i], minh=mh, floors=b_fl[i],
                          fc=b_fc[i], rc=b_rc[i], part=False))
-log("volumes", len(recs))
+log("volumes", len(recs), "podiums (floating / height / storeys / inferred)", n_pod)
 
 # explode multipolygons
 out = []

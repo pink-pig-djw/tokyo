@@ -17,7 +17,7 @@ uniform float uTime;
 uniform float uSnow;
 uniform float uWet;
 uniform vec3 uWallPal[36];
-uniform vec3 uRoofPal[16];
+uniform vec3 uRoofPal[24];
 uniform vec3 uGlassPal[10];
 uniform float uDbgEmis;
 uniform float uWinLod;
@@ -322,7 +322,7 @@ export function buildingMaterial(manifest) {
   const wallPal = manifest.wallPalette.map((h) => new THREE.Color(h));
   const roofPal = manifest.roofPalette.map((h) => new THREE.Color(h));
   while (wallPal.length < 36) wallPal.push(new THREE.Color(0.8, 0.8, 0.8));
-  while (roofPal.length < 16) roofPal.push(new THREE.Color(0.5, 0.5, 0.5));
+  while (roofPal.length < 24) roofPal.push(new THREE.Color(0.5, 0.5, 0.5));
   const glassPal = GLASS_PALETTE.map((h) => new THREE.Color(h));
 
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0, flatShading: true });

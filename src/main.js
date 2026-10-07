@@ -119,6 +119,7 @@ export class App {
     this.buildingMeshes = [];
     this.timer = new THREE.Timer();
     this.ready = false;
+    this.warmed = new Promise((r) => { this._warmed = r; });
     // nothing is drawn while the opaque loading screen covers the canvas
     this.revealed = params.has('shot');
 
@@ -213,8 +214,9 @@ export class App {
     const pending = this.pendingParts = new Set(['道路', '树木与招牌', '车流', '精修街区']);
     this.partsTotal = pending.size;
     const done = (name) => () => { pending.delete(name); this.ui?.streamProgress(); };
-    // the refined districts away from the first view, one per task
-    const districtsP = (async () => {
+    // the refined districts away from the first view: main-thread work, so after the shader
+    // warm-up (the loading screen can go first), one per task
+    const districtsP = this.warmed.then(async () => {
       for (const d of this.districts.take()) {
         await new Promise((r) => setTimeout(r, 0));
         const g = this.districts.build(d);
@@ -223,7 +225,7 @@ export class App {
         this.districts.group.add(g);
         this.shadowState.dirty = true;
       }
-    })().then(done('精修街区'));
+    }).then(done('精修街区'));
     const roadsP = fetchBinary('roads.bin.gz')
       .then((buf) => this.pool.run('roads', buf, { rainbow: this.manifest.rainbow }))
       .then((res) => {
@@ -269,6 +271,7 @@ export class App {
       if (this.renderer.compileAsync) await this.renderer.compileAsync(this.scene, this.camera);
       else this.renderer.compile(this.scene, this.camera);
     } catch (e) { console.warn('precompile', e); }
+    this._warmed();
   }
 
   reveal() {

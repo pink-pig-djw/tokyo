@@ -475,6 +475,7 @@ WALL_PALETTE = [
 ROOF_PALETTE = [
     "#8c8b86", "#a2a19a", "#75746f", "#b5b2a8", "#5a6068", "#3f454d", "#4f5965", "#6a5446", "#7e4b3a",
     "#4b6e5a", "#6d7f63", "#c4c3bc", "#9a8e7e", "#2f3338", "#7a8794", "#5e6e58",
+    "#56703c",   # rooftop garden (last: ROOF_GREEN)
 ]
 
 
@@ -649,6 +650,27 @@ for i in range(NB):
         fl |= 16                      # lit storefront at street level
     wall[i], roof[i], style[i], flags[i] = w, rf, st, fl
 log("styles", np.bincount(style))
+
+# ---------------------------------------------------------------- rooftop gardens
+# A park, lawn or pitch mapped mostly on top of a building (Miyashita Park, station and mall
+# roof gardens) is hidden by the building's mass: that roof gets the lawn colour instead. Parks
+# that merely contain buildings (the museums in Ueno Park) don't count: the green has to lie
+# mostly on the roof and cover a good part of it.
+ROOF_GREEN = len(ROOF_PALETTE) - 1
+_lu = pq.read_table(os.path.join(RAW, "land_use.parquet"), columns=["class", "geometry"])
+_green = [g for g, c in zip(project(shapely.from_wkb(col(_lu, "geometry"))), _lu.column("class").to_pylist())
+          if c in ("park", "garden", "grass", "recreation_ground", "village_green", "meadow", "dog_park", "pitch",
+                   "playground", "flowerbed") and shapely.get_type_id(g) in (3, 6)]
+_green = np.array([g for g in _green if g.area > 40], dtype=object)
+_bi, _gi = STRtree(_green).query(geoms, predicate="intersects")
+_keep = shapely.area(_green[_gi]) < 3 * AREA[_bi]
+_bi, _gi = _bi[_keep], _gi[_keep]
+_on = shapely.area(shapely.intersection(geoms[_bi], _green[_gi]))
+_mostly = _on > 0.6 * shapely.area(_green[_gi])
+_cover = np.bincount(_bi[_mostly], weights=_on[_mostly], minlength=NB)
+roof_garden = _cover > 0.3 * AREA
+roof[roof_garden] = ROOF_GREEN
+log("rooftop gardens", int(roof_garden.sum()))
 
 # hand-modelled replacements: drop the extruded footprint, remember its pose for the model
 pagoda = None
