@@ -62,7 +62,7 @@ export const PLACES = [
   {
     id: 'shibuya', group: 'streets', zh: '涩谷十字路口', ja: '渋谷スクランブル交差点', st: 'G01', stName: '渋谷',
     lon: 139.70056, lat: 35.6595, h: 0,
-    cam: { y: 6, dist: 300, az: 305, el: 34 },
+    cam: { y: 12, dist: 280, az: 160, el: 28 },
     text: '世界上最繁忙的路口之一：信号灯转绿时，行人从各个方向同时涌入。周围大楼外墙挂满巨型屏幕。',
   },
   {
@@ -79,8 +79,8 @@ export const PLACES = [
   },
   {
     id: 'akihabara', group: 'streets', zh: '秋叶原', ja: '秋葉原', st: 'H16', stName: '秋葉原',
-    lon: 139.7731, lat: 35.6984, h: 0,
-    cam: { y: 15, dist: 500, az: 190, el: 28 },
+    lon: 139.77134, lat: 35.6990, h: 0,
+    cam: { y: 10, dist: 330, az: 188, el: 16 },
     text: '电器街与动漫、游戏文化的中心，中央大道两侧满是广告屏与招牌。',
   },
   {
@@ -104,7 +104,7 @@ export const PLACES = [
   {
     id: 'tokyostation', group: 'green', zh: '东京站丸之内站舍', ja: '東京駅丸の内駅舎', st: 'M17', stName: '東京',
     lon: 139.7656, lat: 35.6812, h: 0,
-    cam: { y: 15, dist: 560, az: 265, el: 22 },
+    cam: { y: 15, dist: 300, az: 289, el: 9 },
     text: '1914 年启用的红砖站舍，由辰野金吾设计，2012 年完成复原。正对皇居方向的行幸大道。',
   },
   {

@@ -12,7 +12,7 @@ import { createTraffic } from './world/traffic.js';
 import { Weather } from './world/weather.js';
 import { createRoads } from './world/roads.js';
 import { createLandmarks, makeLL } from './world/landmarks.js';
-import { createDistricts } from './world/districts/index.js';
+import { Districts } from './world/districts/index.js';
 import { Director } from './core/director.js';
 import { Tour } from './core/tour.js';
 import { UI } from './ui/ui.js';
@@ -167,7 +167,7 @@ export class App {
     this.landmarks = createLandmarks(manifest);
     this.scene.add(this.landmarks.group);
     // hand-styled heroes of the refined districts (their generic volumes are not in the chunks)
-    this.districts = createDistricts(manifest);
+    this.districts = new Districts(manifest);
     this.scene.add(this.districts.group);
     this.buildingMat = buildingMaterial(manifest);
     this.streamer = new ChunkStreamer(manifest.chunks, (c) => this.addChunk(c));
@@ -191,7 +191,12 @@ export class App {
 
   /** The buildings around the starting view; the loading screen can go after this. */
   async loadStart(onProgress) {
-    const set = this.streamer.startSet(this.camera, this.controls.target);
+    const target = this.controls.target;
+    for (const d of this.districts.take(target.x, target.z, 3000)) {
+      const g = this.districts.build(d);
+      if (g) this.districts.group.add(g);
+    }
+    const set = this.streamer.startSet(this.camera, target);
     let n = 0;
     await this.streamer.loadSet(set, () => onProgress?.(0.15 + 0.85 * (++n / set.length), '建筑'));
     this.ready = true;
@@ -205,8 +210,20 @@ export class App {
       try { await this.renderer.compileAsync(o, this.camera, this.scene); } catch (e) { /* compiles on first use */ }
       this.scene.add(o);
     }));
-    const pending = this.pendingParts = new Set(['道路', '树木与招牌', '车流']);
+    const pending = this.pendingParts = new Set(['道路', '树木与招牌', '车流', '精修街区']);
+    this.partsTotal = pending.size;
     const done = (name) => () => { pending.delete(name); this.ui?.streamProgress(); };
+    // the refined districts away from the first view, one per task
+    const districtsP = (async () => {
+      for (const d of this.districts.take()) {
+        await new Promise((r) => setTimeout(r, 0));
+        const g = this.districts.build(d);
+        if (!g) continue;
+        try { await this.renderer.compileAsync(g, this.camera, this.scene); } catch (e) { /* compiles on first use */ }
+        this.districts.group.add(g);
+        this.shadowState.dirty = true;
+      }
+    })().then(done('精修街区'));
     const roadsP = fetchBinary('roads.bin.gz')
       .then((buf) => this.pool.run('roads', buf, { rainbow: this.manifest.rainbow }))
       .then((res) => {
@@ -236,7 +253,7 @@ export class App {
     }).then(() => { this.shadowState.dirty = true; }).then(done('树木与招牌'));
     this.streamer.onProgress(() => this.ui?.streamProgress());
     const chunksP = this.streamer.streamRest();
-    this.restLoaded = Promise.all([roadsP, trafficP, extrasP, chunksP]).then(() => {
+    this.restLoaded = Promise.all([roadsP, trafficP, extrasP, districtsP, chunksP]).then(() => {
       this.fullyLoaded = true;
       this.shadowState.dirty = true;
       this.ui?.streamProgress();

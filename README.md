@@ -59,13 +59,27 @@ triangles per frame), `tools/frametime.mjs` (frame time, optionally with parts s
 
 ## Refined districts
 
-Shibuya, Akihabara and Tokyo Station get hand-styled hero buildings and street dressing.
+Shibuya, Akihabara and Tokyo Station get hand-styled hero buildings and street dressing:
+
+- **Shibuya** — Scramble Square, QFRONT with Q's EYE, SHIBUYA109's cylinder, MAGNET, Hikarie,
+  Mark City, Shibuya Stream, Cerulean and Infos towers; the crossing's five crosswalks (one
+  diagonal), Hachiko square, the Ginza line viaduct and M-roof station, the Center Gai gate and
+  the big screens around the crossing.
+- **Akihabara** — the two-level JR station (Sobu line on top), Radio Kaikan's crown sign,
+  Yodobashi Akiba, UDX, Don Quijote, the mAAch brick viaduct, the Sobu girder over Chuo-dori,
+  the green Matsuzumicho arch and walls of vertical katakana signs along Chuo-dori.
+- **Tokyo Station** — the 1914 red-brick Marunouchi building with its domes, the platform field
+  with canopies and trains, GranRoof, the Yaesu and Marunouchi towers, Torch Tower under
+  construction, Gyoko-dori and the Yaesu side streets.
+
 `tools/districts/<name>.json` lists the real buildings to replace (Overture ids: their generic
 volumes are dropped and the footprint is exported to the manifest), height fixes, LED screens
 (snapped onto the facade they face), sign streets and elevation profiles for viaducts;
 `src/world/districts/<name>.js` builds them with the kit in `src/world/districts/kit.js`
 (footprint extrusions and solids whose facade patterns — curtain wall, fins, ribbon windows,
 brick with stone bands, LED screens, sign mosaics — are evaluated in metres on the surface).
+Each district is one draw call (17–29k triangles); the ones near the first view are built
+before the city is shown, the others right after.
 
 ## Rebuild the data
 

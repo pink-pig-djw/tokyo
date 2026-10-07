@@ -146,7 +146,8 @@ export class UI {
     }
     const parts = [...(app.pendingParts || [])];
     $('streamtext').textContent = `后台加载 · 城区 ${st.done}/${st.total}${parts.length ? ' · ' + parts.join(' ') : ''}`;
-    const total = st.total + 3, got = st.done + 3 - parts.length;
+    const k = app.partsTotal || 0;
+    const total = st.total + k, got = st.done + k - parts.length;
     $('streambar').style.width = `${Math.round(got / total * 100)}%`;
     chip.classList.add('on');
   }

@@ -135,10 +135,13 @@ export class Kit {
 
   /** Quad from four corners [x,y,z] in counter-clockwise order seen from the front. */
   quad(p0, p1, p2, p3, color, style, uv = [[0, 0], [1, 0], [1, 1], [0, 1]]) {
-    const ax = p1[0] - p0[0], ay = p1[1] - p0[1], az = p1[2] - p0[2];
-    const bx = p3[0] - p0[0], by = p3[1] - p0[1], bz = p3[2] - p0[2];
+    // normal from the diagonals: still right when one edge has collapsed (a triangle)
+    const ax = p2[0] - p0[0], ay = p2[1] - p0[1], az = p2[2] - p0[2];
+    const bx = p3[0] - p1[0], by = p3[1] - p1[1], bz = p3[2] - p1[2];
     let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
-    const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+    const l = Math.hypot(nx, ny, nz);
+    if (l < 1e-9) return;                                  // no area: nothing to draw
+    nx /= l; ny /= l; nz /= l;
     const i = [p0, p1, p2, p3].map((p, k) => this._v(p[0], p[1], p[2], nx, ny, nz, color, uv[k][0], uv[k][1], style));
     this.idx.push(i[0], i[1], i[2], i[0], i[2], i[3]);
   }
@@ -164,13 +167,14 @@ export class Kit {
     const ny = down ? -1 : 1;
     const base = this.pos.length / 3;
     for (const [x, z] of ring) this._v(x, y, z, 0, ny, 0, color, x, z, style);
-    // ShapeUtils returns triangles wound for a y-up 2D plane (x, y); in x/z with normal +y the
-    // winding has to be reversed unless the ring is clockwise in x/z
-    const ccw = ringArea(ring) > 0;
-    for (const t of tris) {
-      const up = !down;
-      if (ccw === up) this.idx.push(base + t[0], base + t[2], base + t[1]);
-      else this.idx.push(base + t[0], base + t[1], base + t[2]);
+    // earcut (inside ShapeUtils) normalises the ring orientation, so the winding of its triangles
+    // does not follow the ring's: check each one against the wanted normal
+    for (const [a, b, c] of tris) {
+      const A = ring[a], B = ring[b], C = ring[c];
+      // y of (B - A) x (C - A) for the 3D points (x, 0, z)
+      const gy = (B[1] - A[1]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[1] - A[1]);
+      if ((gy > 0) === !down) this.idx.push(base + a, base + b, base + c);
+      else this.idx.push(base + a, base + c, base + b);
     }
   }
 
@@ -238,6 +242,7 @@ export class Kit {
 const PATTERN_GLSL = /* glsl */`
 uniform float uNight;
 uniform float uTime;
+uniform float uLitOff;
 varying vec2 vHUV;
 flat varying vec4 vHStyle;
 varying vec3 vHN;
@@ -265,11 +270,20 @@ vec3 hsv(float h, float s, float v) {
 vec3 warmCool(float r) {
   return r < 0.45 ? vec3(1.0, 0.78, 0.52) : r < 0.8 ? vec3(1.0, 0.92, 0.8) : vec3(0.82, 0.9, 1.0);
 }
-// lit windows: cell id -> emissive
-vec3 litCell(vec2 id, float share) {
-  float r = hh1(id * vec2(1.0, 7.31) + floor(id.y / 3.0) * 0.37);
-  float on = step(r, share);
-  return warmCool(hh1(id + 5.17)) * on * (0.3 + 0.5 * hh1(id + 9.3));
+// lit windows (cell = window grid coordinates) -> emissive. Like the generic offices: tenants
+// light floors in runs, one colour per tenant, and fewer as the evening goes on (uLitOff);
+// share is the lit share early in the evening. Far away: the average instead of sparkle.
+vec3 litCell(vec2 cell, float share) {
+  vec2 id = floor(cell);
+  float s = clamp(share * uLitOff * 1.6, 0.0, 0.95);
+  vec2 ten = vec2(floor(id.x / 40.0), floor(id.y / 3.0));
+  float tenant = hh1(ten + 0.37);
+  float sec = hh1(vec2(floor(id.x / 6.0), id.y) + 3.1);
+  float on = step(tenant, s * 1.15) * step(sec, 0.8 + s * 0.2) * step(hh1(id + 5.17), 0.96);
+  vec3 c = mix(vec3(0.96, 0.93, 0.86), warmCool(hh1(ten + 5.17)), 0.45);
+  vec3 near = c * on * (0.06 + 0.14 * hh1(id + 9.3));
+  vec3 far = c * step(tenant, s * 1.15) * (0.8 + s * 0.2) * 0.125;
+  return mix(near, far, smoothstep(0.35, 0.9, max(fwidth(cell.x), fwidth(cell.y))));
 }
 `;
 
@@ -291,7 +305,11 @@ const PATTERN_MAIN = /* glsl */`
       vec3 frame = pat == 1 ? vec3(0.86, 0.87, 0.86) : mix(base, vec3(0.75), 0.6);
       col = mix(glass, frame, fr);
       rough = mix(0.06, 0.55, fr); metal = mix(0.85, 0.2, fr);
-      if (wall) emis = litCell(floor(cell), p3) * (1.0 - fr) * uNight * 1.3;
+      // lit only through the vision glass: slab edge and ceiling void stay dark between floors
+      float fy = fract(cell.y), fwy = fwidth(cell.y);
+      float vis = smoothstep(0.12 - fwy, 0.12 + fwy, fy) * (1.0 - smoothstep(0.8 - fwy, 0.8 + fwy, fy));
+      vis = mix(vis, 0.68, smoothstep(0.2, 0.55, fwy));
+      if (wall) emis = litCell(cell, p3) * (1.0 - fr) * vis * uNight * 1.3;
     } else if (pat == 2) {
       // ribbon windows
       float f = fract(v / max(p2, 1.0));
@@ -301,8 +319,7 @@ const PATTERN_MAIN = /* glsl */`
       vec3 glass = vec3(0.12, 0.15, 0.19) + base * 0.08;
       col = mix(base, glass, win);
       rough = mix(0.75, 0.1, win); metal = mix(0.05, 0.7, win);
-      vec2 id = floor(vec2(u / 3.2, v / max(p2, 1.0)));
-      if (wall) emis = litCell(id, p3) * win * uNight * 1.2;
+      if (wall) emis = litCell(vec2(u / 3.2, v / max(p2, 1.0)), p3) * win * uNight * 1.2;
     } else if (pat == 3) {
       // red brick + white stone string courses and window surrounds (Tokyo Station)
       vec2 cell = vec2(u / max(p1, 1.0), v / max(p2, 1.0));
@@ -318,7 +335,7 @@ const PATTERN_MAIN = /* glsl */`
       if (wall) {
         // warm floodlighting from below + lit windows
         float flood = 0.18 + 0.32 * (1.0 - smoothstep(0.0, 28.0, v));
-        emis = (col * flood * (1.0 - glassM) + litCell(floor(cell), p3) * glassM * 1.4) * uNight;
+        emis = (col * flood * (1.0 - glassM) + litCell(cell, p3) * glassM * 1.4) * uNight;
       }
     } else if (pat == 4) {
       // stone / tile with punched windows
@@ -326,7 +343,7 @@ const PATTERN_MAIN = /* glsl */`
       float win = hbox(cell, vec2(0.5, 0.55), vec2(0.27, 0.3));
       col = mix(base, vec3(0.13, 0.15, 0.18), win);
       rough = mix(0.8, 0.12, win); metal = mix(0.02, 0.6, win);
-      if (wall) emis = litCell(floor(cell), p3) * win * uNight * 1.3;
+      if (wall) emis = litCell(cell, p3) * win * uNight * 1.3;
     } else if (pat == 5) {
       rough = p1; metal = p2;
       emis = base * p3 * (0.25 + uNight);
@@ -393,6 +410,7 @@ export function heroMaterial() {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uNight = U.uNight;
     shader.uniforms.uTime = U.uTime;
+    shader.uniforms.uLitOff = U.uLitOff;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec2 aUV;
@@ -413,7 +431,7 @@ export function heroMaterial() {
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = hMetal;')
       .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance = hEmis;');
   };
-  mat.customProgramCacheKey = () => 'tokyo-hero-v1';
+  mat.customProgramCacheKey = () => 'tokyo-hero-v2';
   _material = mat;
   return mat;
 }
